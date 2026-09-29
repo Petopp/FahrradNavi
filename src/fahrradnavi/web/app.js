@@ -145,7 +145,7 @@ function renderPoints() {
     const tag = isStart ? "A" : isEnd ? "B" : String(i);
     const row = document.createElement("div");
     row.className = "pt row"; row.style.marginBottom = "6px";
-    row.innerHTML = `<span class="dot" style="background:${color}">${tag}</span>
+    row.innerHTML = `${slots > 1 ? '<button class="grip" title="Ziehen zum Umsortieren (oder Pfeiltasten ↑/↓)" aria-label="Punkt verschieben">⠿</button>' : ""}<span class="dot" style="background:${color}">${tag}</span>
       <input type="text" placeholder="${isStart ? "Start" : isEnd ? "Ziel" : tab === "trip" ? "Station" : "Zwischenziel"} suchen …" autocomplete="off">
       ${p || isVia ? '<button class="x" title="Entfernen">×</button>' : ""}`;
     const input = row.querySelector("input");
@@ -158,6 +158,8 @@ function renderPoints() {
     setupSearch(row, input, i);
     const x = row.querySelector(".x");
     if (x) x.onclick = () => removePoint(i);
+    const grip = row.querySelector(".grip");
+    if (grip) setupReorder(grip, row, i, slots);
     box.appendChild(row);
     if (p) {
       const icon = L.divIcon({ className: "", html: `<div style="background:${color};color:#fff;width:26px;height:26px;border-radius:50%;display:grid;place-items:center;font-weight:700;border:2px solid #fff;box-shadow:0 1px 5px rgba(0,0,0,.4)">${tag}</div>`, iconSize: [26, 26], iconAnchor: [13, 13] });
@@ -178,6 +180,56 @@ function renderPoints() {
     return;
   }
   $("clickhint").style.display = (n >= 2 && !emptyVia) ? "none" : "block";
+}
+// ---- Reihenfolge per Ziehen (Maus und Touch über Pointer-Events) oder Pfeiltasten ----------------
+function movePoint(from, to, slots) {
+  if (from === to || to < 0 || to >= slots) return false;
+  while (points.length < slots) points.push(null);
+  const [p] = points.splice(from, 1);
+  points.splice(to, 0, p);
+  activeSlot = -1;
+  renderPoints();
+  if (tab === "route" || tripArmed) scheduleRoute();
+  return true;
+}
+function setupReorder(grip, row, i, slots) {
+  grip.addEventListener("keydown", (e) => {
+    const to = e.key === "ArrowUp" ? i - 1 : e.key === "ArrowDown" ? i + 1 : -1;
+    if (to < 0 && e.key !== "ArrowUp") return;
+    e.preventDefault();
+    if (movePoint(i, to, slots)) $("points").querySelectorAll(".grip")[to]?.focus();
+  });
+  grip.addEventListener("pointerdown", (e) => {
+    if (e.button !== undefined && e.button !== 0) return;
+    e.preventDefault();
+    grip.setPointerCapture(e.pointerId);
+    const rows = [...$("points").querySelectorAll(".pt")];
+    const rects = rows.map((r) => r.getBoundingClientRect());
+    const step = rects.length > 1 ? rects[1].top - rects[0].top : rects[0].height + 6;
+    const y0 = e.clientY;
+    let target = i;
+    row.classList.add("dragging");
+    const onMove = (ev) => {
+      const dy = ev.clientY - y0;
+      row.style.transform = `translateY(${dy}px)`;
+      target = Math.max(0, Math.min(rows.length - 1, i + Math.round(dy / step)));
+      rows.forEach((r, k) => {
+        if (k === i) return;
+        const shift = i < target && k > i && k <= target ? -step : i > target && k < i && k >= target ? step : 0;
+        r.style.transform = shift ? `translateY(${shift}px)` : "";
+      });
+    };
+    const onUp = () => {
+      grip.removeEventListener("pointermove", onMove);
+      grip.removeEventListener("pointerup", onUp);
+      grip.removeEventListener("pointercancel", onUp);
+      rows.forEach((r) => { r.style.transform = ""; r.classList.remove("dragging"); });
+      movePoint(i, target, slots);
+    };
+    grip.addEventListener("pointermove", onMove);
+    grip.addEventListener("pointerup", onUp);
+    grip.addEventListener("pointercancel", onUp);
+  });
 }
 function setupSearch(row, input, i) {
   let t = null, box = null;

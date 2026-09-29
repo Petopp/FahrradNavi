@@ -185,6 +185,28 @@ async def main() -> int:
         await page.locator("#points .pt").nth(n_before - 2).locator("button.x").click()
         check("Leeres Zwischenziel lässt sich wieder entfernen", await page.locator("#points .pt").count() == n_before - 1)
 
+        # Umsortieren per Ziehen: Ziel (Zeile 3) nach oben ziehen -> wird Start
+        await page.click("#reset")
+        await click_ll((0, 0)); await click_ll((1500, 330)); await click_ll((3000, 0)); await dist()
+        before = await page.locator("#points input").evaluate_all("e => e.map(x => x.value)")
+        g = await page.locator("#points .grip").nth(2).bounding_box()
+        top = await page.locator("#points .grip").nth(0).bounding_box()
+        await page.mouse.move(g["x"] + g["width"] / 2, g["y"] + g["height"] / 2); await page.mouse.down()
+        await page.mouse.move(top["x"] + top["width"] / 2, top["y"] + 2, steps=10)
+        await page.wait_for_timeout(150)
+        shifted = await page.locator("#points .pt").nth(0).evaluate("e => getComputedStyle(e).transform")
+        await page.mouse.up(); await settle(); await dist()
+        after = await page.locator("#points input").evaluate_all("e => e.map(x => x.value)")
+        check("Ziehen am Griff sortiert um (Ziel wird Start)", after == [before[2], before[0], before[1]], f"{before} -> {after}")
+        check("Beim Ziehen rücken die anderen Zeilen sichtbar nach", shifted not in ("none", ""), shifted)
+        start_marker = await page.evaluate("""() => { const m = markers[0].getLatLng(); return [m.lat, m.lng]; }""")
+        check("Marker A folgt der neuen Reihenfolge", abs(start_marker[1] - to_ll(3000, 0)[1]) < 1e-4, str(start_marker))
+        # Pfeiltasten
+        await page.locator("#points .grip").nth(0).focus(); await page.keyboard.press("ArrowDown"); await settle()
+        after2 = await page.locator("#points input").evaluate_all("e => e.map(x => x.value)")
+        focus_ok = await page.evaluate("document.activeElement === document.querySelectorAll('#points .grip')[1]")
+        check("Pfeiltaste ↓ verschiebt den Punkt eine Position nach unten (Fokus wandert mit)", after2 == [after[1], after[0], after[2]] and focus_ok, str(after2))
+
         # Stelle meiden per Popup
         await page.click("#reset")
         await click_ll((0, 0)); await click_ll((3000, 0)); await dist()
@@ -261,6 +283,24 @@ async def main() -> int:
         vals = await page.locator("#points input").evaluate_all("e => e.map(x => x.value)")
         focused = await page.evaluate("document.activeElement === [...document.querySelectorAll('#points input')].pop()")
         check("„+ Station“ fügt ein leeres Feld ein", len(vals) == 3 and vals[2] == "" and focused, str(vals))
+        # zwei Stationen, Reihenfolge per Ziehen tauschen -> Rundreise fährt sie in neuer Reihenfolge
+        await page.locator("#points .pt").nth(2).locator("button.x").click()
+        await page.evaluate("([la, lo]) => map.setView([la, lo], map.getZoom(), { animate: false })", list(to_ll(5250, 8250)))
+        await click_ll((5250, 8250)); await settle()  # Zellmitte, nicht auf der angezeigten Schleife
+        await page.click("#tripGo"); await dist()
+        def order_js(a, b):
+            return f"""() => {{ const c = routes[selected].coordinates;
+              const idx = (la, lo) => {{ let best = 0, bd = 1e18; c.forEach((p, i) => {{ const d = Math.hypot((p[0]-lo)*74600, (p[1]-la)*110574); if (d < bd) {{ bd = d; best = i; }} }}); return best; }};
+              return idx({a[0]}, {a[1]}) < idx({b[0]}, {b[1]}); }}"""
+        st1, st2 = to_ll(8000, 5000), to_ll(5250, 8250)
+        first_ok = await page.evaluate(order_js(st1, st2))
+        g = await page.locator("#points .grip").nth(2).bounding_box()
+        t = await page.locator("#points .grip").nth(1).bounding_box()
+        await page.mouse.move(g["x"] + 5, g["y"] + 5); await page.mouse.down()
+        await page.mouse.move(t["x"] + 5, t["y"] + 2, steps=8); await page.mouse.up()
+        await settle(); await dist()
+        swapped = await page.evaluate(order_js(st2, st1))
+        check("Stationen umsortiert → Rundreise fährt sie in der neuen Reihenfolge an", first_ok and swapped, f"{first_ok} {swapped}")
         await page.locator("#points .pt").nth(2).locator("button.x").click()
         await page.locator("#points .pt").nth(1).locator("button.x").click()
         check("Stationen wieder entfernt, Richtung wieder wählbar", await page.locator("#points .pt").count() == 1 and not await page.is_disabled("#tripHeading"))
@@ -285,6 +325,12 @@ async def main() -> int:
         await page.click("#tabRoute")
         check("Zurück zum Reiter Route räumt Ergebnis auf", not await page.is_visible("#stats"))
 
+        # Handy-Ansicht: Karte füllt ihren Bereich (Regression: alte Regel begrenzte sie auf 45 % davon)
+        await page.set_viewport_size({"width": 390, "height": 844})
+        await page.wait_for_timeout(400)
+        mh = await page.evaluate("document.getElementById('map').getBoundingClientRect().height")
+        wh = await page.evaluate("document.getElementById('mapwrap').getBoundingClientRect().height")
+        check("Handy-Ansicht: Karte füllt ihren Bereich", abs(mh - wh) < 2 and wh > 300, f"{mh:.0f}/{wh:.0f} px")
         check("Keine JavaScript-Fehler", not errs, "; ".join(errs))
         await browser.close()
     s1.should_exit = s2.should_exit = True

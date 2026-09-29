@@ -55,6 +55,9 @@ Alles in der Weboberfläche, ohne Neuberechnen von Hand:
 * **Route per Markierung ändern:** Mit der Maus über die Route fahren – ein Zieh-Marker erscheint; **Ziehen** fügt ein Zwischenziel
   ein (wie bei Komoot). **Klick auf die Route** öffnet ein Menü: *Zwischenziel hier einfügen* oder *Diese Stelle meiden*
   (Kreis von 60 m). Zwischenziel-Marker sind verschiebbar, mit dem × in der Liste löschbar.
+* **Reihenfolge ändern:** Punkte in der Liste am Griff ⠿ ziehen (Maus oder Finger) oder den Griff fokussieren und mit den
+  Pfeiltasten ↑/↓ verschieben. Gilt für Start/Zwischenziele/Ziel ebenso wie für die Stationen einer Rundreise; die Route wird
+  sofort neu berechnet.
 * **Zwischenziele eintippen:** *+ Zwischenziel* fügt vor dem Ziel ein leeres Feld ein (mit Cursor darin); es wird per Ortssuche
   oder per Klick auf die Karte gefüllt. Leere Felder lassen sich mit × wieder entfernen.
 * **Zurück zum Start:** Haken *Rundkurs über die Zwischenziele* hängt den Start als Ziel an.
@@ -91,7 +94,7 @@ Grenzen: 20 Bereiche, 300 Polygonpunkte, Radius ≤ 50 km, 10 Lieblingswege mit 
 
 *Drei Rundreisen ab der Leutstettener Straße (Wunsch 35 km): 34,3 / 33,8 / 39,0 km, Richtungen 300° / 60° / 0°.*
 
-Browser-Rauchtest der Bedienung (Playwright): `python scripts/ui_smoke.py` (43 Prüfungen auf Testnetzen).
+Browser-Rauchtest der Bedienung (Playwright): `python scripts/ui_smoke.py` (49 Prüfungen auf Testnetzen).
 
 ## Innenstadt meiden
 

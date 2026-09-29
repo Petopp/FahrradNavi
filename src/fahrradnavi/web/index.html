@@ -29,6 +29,11 @@
   .pt { position: relative; }
   .pt .dot { flex: none; width: 22px; height: 22px; border-radius: 50%; color: #fff; font-size: 12px; font-weight: 700; display: grid; place-items: center; }
   .pt.active input { border-color: #3b6fd4; box-shadow: 0 0 0 2px rgba(59,111,212,.25); }
+  .pt .grip { flex: none; border: 0; background: none; color: var(--muted); font-size: 16px; line-height: 1; padding: 4px 2px; cursor: grab; touch-action: none; border-radius: 4px; }
+  .pt .grip:focus-visible { outline: 2px solid var(--accent); }
+  .pt.dragging { z-index: 10; opacity: .9; box-shadow: 0 6px 16px rgba(0,0,0,.2); border-radius: 8px; background: var(--panel); }
+  .pt.dragging .grip { cursor: grabbing; }
+  .pt:not(.dragging) { transition: transform .12s ease; }
   .pt button.x { flex: none; border: 0; background: none; color: var(--muted); font-size: 18px; cursor: pointer; padding: 0 4px; }
   .suggest { position: absolute; left: 30px; right: 0; top: 100%; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; z-index: 5; box-shadow: 0 6px 18px rgba(0,0,0,.18); max-height: 260px; overflow-y: auto; }
   .suggest div { padding: 8px 10px; cursor: pointer; } .suggest div:hover { background: var(--bg); }
@@ -61,7 +66,6 @@
   @media (max-width: 760px) {
     body { flex-direction: column-reverse; }
     #side { width: 100%; height: 55%; border-right: 0; border-top: 1px solid var(--line); }
-    #map { height: 45%; flex: none; }
   }
 
   .tabs { display: flex; gap: 6px; }
