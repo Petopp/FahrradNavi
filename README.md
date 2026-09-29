@@ -9,6 +9,11 @@ und GPX-Export (z. B. für Komoot, Garmin, Wahoo, OsmAnd).
 > 16,4 km mit 0,3 km Autostraße – die kürzeste Route (14,6 km) hätte 6,1 km auf Autostraßen. Ganz Bayern ist noch nicht
 > gebaut/gemessen, siehe [Skalierung](#skalierung-auf-ganz-bayern).
 
+![Route Starnberg → Kloster Andechs](docs/route-starnberg-andechs.png)
+
+*Trekkingrad, Standard-Einstellungen: grün = eigener Weg/Radweg, gelb = ruhige Straße, rot = Autostraße.
+Erzeugt mit `python scripts/render_route.py "Starnberg" "Kloster Andechs"`.*
+
 ## Wie das "Meiden" funktioniert
 
 Normale Navis minimieren Zeit oder Länge und "bestrafen" Straßen nur leicht. FahrradNavi minimiert **Kosten in
