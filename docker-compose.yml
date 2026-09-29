@@ -1,0 +1,11 @@
+services:
+  fahrradnavi:
+    build: .
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./data:/data:ro
+    environment:
+      # Für öffentlichen Betrieb eigenen Tile-Anbieter eintragen (siehe README, Abschnitt Kartenkacheln)
+      FAHRRADNAVI_TILE_URL: "https://tile.openstreetmap.org/{z}/{x}/{y}.png"
+    restart: unless-stopped

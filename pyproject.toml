@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "fahrradnavi"
+version = "0.1.0"
+description = "Fahrrad-Routenplaner auf OpenStreetMap-Basis, der Autostraßen konsequent meidet"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "numpy>=1.24",
+    "scipy>=1.10",
+    "osmium>=4.0",
+    "fastapi>=0.110",
+    "uvicorn>=0.27",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=7", "httpx>=0.25"]
+
+[project.scripts]
+fahrradnavi = "fahrradnavi.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+fahrradnavi = ["web/*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

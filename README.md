@@ -1,0 +1,155 @@
+# FahrradNavi
+
+Fahrrad-Routenplaner auf Basis von [OpenStreetMap](https://www.openstreetmap.org), der **Autostraßen konsequent meidet** –
+auch wenn dafür ein Umweg von mehreren Kilometern nötig ist. Reines Python, selbst hostbar, mit Weboberfläche
+und GPX-Export (z. B. für Komoot, Garmin, Wahoo, OsmAnd).
+
+> **Stand:** Prototyp. Kernlogik, API und Weboberfläche sind getestet (39 Tests, synthetisches Testnetz + Browser-Test).
+> Mit echten Bayern-/Starnberg-Daten wurde noch **nicht** gerechnet, weil die Entwicklungsumgebung keinen Zugriff auf
+> Geofabrik/Overpass hatte. Der erste Lauf mit echten Daten steht also noch aus – siehe [Schnellstart](#schnellstart-landkreis-starnberg).
+
+## Wie das "Meiden" funktioniert
+
+Normale Navis minimieren Zeit oder Länge und "bestrafen" Straßen nur leicht. FahrradNavi minimiert **Kosten in
+Meter-Äquivalenten**: 1 m guter Radweg = 1, aber 1 m Bundesstraße ohne Radweg kostet ×150. Der Router nimmt also lieber
+bis zu ~150 m Umweg pro vermiedenem Meter Bundesstraße in Kauf. Ist eine Straße wirklich unvermeidbar (z. B. die einzige
+Brücke), wird sie trotzdem befahren – und in der Karte **rot** markiert.
+
+| Weg | Faktor (bei Stärke "konsequent") |
+|---|---|
+| Radweg (`highway=cycleway`), Feldweg, Pfad | 0,9 – 1,15 |
+| Fahrradstraße, Straße **mit baulich getrenntem Radweg** (`cycleway=track`) | ≈ 1 (Straße spielt keine Rolle) |
+| Verkehrsberuhigt / Spielstraße / Zufahrt | 1,0 – 1,3 |
+| Wohnstraße | 2,2 (Tempo 30: ≈ 1,6) |
+| Nebenstraße (`unclassified`) | 10 |
+| Kreisstraße (`tertiary`) | 40 |
+| Staatsstraße (`secondary`) | 100 |
+| Bundesstraße (`primary`) | 150 |
+| `trunk` | 400 |
+| Autobahn, Treppen, Fußwege ohne Radfreigabe | gesperrt |
+
+Weitere Faktoren (alle in `src/fahrradnavi/profiles.py` / `costing.py` anpassbar):
+
+* **Radinfrastruktur:** Radfahrstreifen mildert den Malus (Exponent ×0,5), Schutzstreifen/Mitbenutzung (×0,8).
+* **Oberfläche & Qualität** je Radtyp: Rennrad meidet Schotter/Kopfsteinpflaster stark, Gravel kaum.
+* **Steigungen** (SRTM-Höhen): Kosten je Höhenmeter und für Abschnitte ab 8 % / 12 % Steigung; E-Bike deutlich milder.
+* **Ampeln** kosten Zeit, **ausgeschilderte Radrouten** (OSM-Relationen `route=bicycle`) werden leicht bevorzugt.
+* `bicycle=use_sidepath` (Radfahrer sollen den Radweg nebenan nutzen) macht die Straße zusätzlich unattraktiv.
+
+Die Weboberfläche zeigt zum Vergleich immer die **kürzeste Route** (grau gestrichelt) und rechnet vor: *"+4,8 km Umweg,
+dafür 3,8 km weniger Autostraße"*.
+
+**Regler** (Web und API): *Straßen meiden* 0 (egal) … 1 (konsequent) … 2 (extrem), *Steigungen meiden* und *schlechten Belag
+meiden* je 0 … 3. Profile: `trekking`, `road` (Rennrad), `gravel`, `ebike`.
+
+## Schnellstart (Landkreis Starnberg)
+
+Voraussetzungen: Python ≥ 3.10, Internetzugang zu `download.geofabrik.de` und `elevation-tiles-prod.s3.amazonaws.com`.
+
+```bash
+python -m venv .venv && source .venv/bin/activate
+pip install -e ".[dev]"
+
+./scripts/setup_starnberg.sh        # lädt Oberbayern (~250 MB) + Höhen, baut data/graph.npz
+
+fahrradnavi route --from "Starnberg" --to "Kloster Andechs" --gpx andechs.gpx
+fahrradnavi serve                   # Weboberfläche auf http://127.0.0.1:8000
+```
+
+Der Ablauf im Detail:
+
+```bash
+fahrradnavi download oberbayern --out data                       # Geofabrik-Extrakt (.osm.pbf)
+fahrradnavi dem --region starnberg --out data/dem                # SRTM-Höhenkacheln
+fahrradnavi build data/oberbayern-latest.osm.pbf --region starnberg --dem data/dem --out data/graph.npz
+```
+
+Kleine Gebiete gehen auch ohne 250-MB-Download per Overpass-API:
+`fahrradnavi download starnberg --overpass --out data` → `data/starnberg.osm`. Für größere Gebiete bitte Geofabrik nutzen.
+
+Eigene Gebiete: `--bbox min_lon,min_lat,max_lon,max_lat` statt `--region`.
+Ganz Bayern: `fahrradnavi download bayern`, dann `fahrradnavi build data/bayern-latest.osm.pbf` (siehe [Skalierung](#skalierung-auf-ganz-bayern)).
+
+## Bedienung
+
+**Weboberfläche:** Auf die Karte klicken (Start, Ziel, weitere Klicks = Zwischenziele; Marker sind verschiebbar) oder oben
+nach Orten/Straßen suchen. Route, Statistik (Anteil eigener Weg / ruhige Straße / Autostraße), Höhenprofil und der
+Button **GPX exportieren**. Die Route steht im URL-Fragment und lässt sich teilen.
+
+**Komoot & Co.:** GPX-Datei exportieren und im Komoot-Planer über *"GPX importieren"* laden bzw. in Garmin Connect,
+Wahoo, OsmAnd, Locus, Komoot etc. importieren. Die Navigation übernimmt dann die jeweilige App.
+
+**API** (interaktive Doku unter `/api/docs`):
+
+```bash
+curl -X POST localhost:8000/api/route -H 'Content-Type: application/json' -d '{
+  "points": [{"lat": 47.999, "lon": 11.340}, {"lat": 47.974, "lon": 11.181}],
+  "profile": "trekking", "avoid_roads": 1.0, "hills": 1.0, "surface": 1.0, "compare": true }'
+
+curl -X POST localhost:8000/api/gpx   -H 'Content-Type: application/json' -d '{...gleicher Body...}' -o route.gpx
+curl 'localhost:8000/api/geocode?q=andechs'
+```
+
+## Selbst betreiben
+
+```bash
+docker compose up -d     # erwartet ./data/graph.npz (vorher mit den Befehlen oben bauen)
+```
+
+(Das Dockerfile wurde bisher nicht ausgeführt – bitte beim ersten Einsatz prüfen.) Ohne Docker:
+`fahrradnavi serve --host 0.0.0.0 --port 8000` hinter einem Reverse-Proxy (Caddy/nginx) mit HTTPS.
+
+Umgebungsvariablen: `FAHRRADNAVI_GRAPH` (Pfad zur `graph.npz`), `FAHRRADNAVI_TILE_URL`,
+`FAHRRADNAVI_TILE_ATTRIBUTION`.
+
+**Kartenkacheln:** Der Standard `tile.openstreetmap.org` ist nur für geringe Last gedacht
+([Nutzungsrichtlinie](https://operations.osmfoundation.org/policies/tiles/)). Für eine öffentliche Seite bitte einen
+eigenen Tile-Server oder einen Anbieter (MapTiler, Stadia, Thunderforest – hat auch eine Fahrradkarte) über
+`FAHRRADNAVI_TILE_URL` eintragen. Leaflet ist lokal eingebunden, es werden keine CDN-Skripte geladen.
+
+**Ortssuche:** Läuft offline über die Namen aus den importierten OSM-Daten (Orte, Sehenswürdigkeiten, Straßen) – kein
+Nominatim nötig, aber ohne Hausnummern.
+
+## Skalierung auf ganz Bayern
+
+* **Bau:** Python-Schleife über alle Wege, für Bayern grob 10–30 Minuten und ~8–16 GB RAM (Node-Cache liegt bei großen
+  Dateien automatisch auf Platte). Für Oberbayern/Landkreise deutlich weniger. Einmalig bzw. bei Daten-Update.
+* **Betrieb:** Der Graph wird komplett in den RAM geladen (Bayern: einige GB). Ein A\*-Lauf dauert bei 90 km auf einem
+  500 000-Kanten-Testnetz ~0,7 s; bei ganz Bayern ist mit Sekunden für lange Routen zu rechnen. Wenn das zu langsam wird:
+  Routing-Kern durch Contraction Hierarchies/Rust ersetzen oder je Regierungsbezirk einen Graphen laden.
+* **Aktualisieren:** Neuen Extrakt laden, `build` erneut ausführen, Server neu starten.
+
+## Projektstruktur
+
+```
+src/fahrradnavi/
+  tags.py       OSM-Tags -> Wegklasse, Radinfrastruktur, Oberfläche, Einbahn
+  profiles.py   Radtypen, Faktoren, Regler-Optionen
+  importer.py   .osm/.pbf lesen (osmium): Wege, Ampeln, Radrouten, Orte
+  dem.py        SRTM-Höhen (.hgt)
+  graph.py      kompakter Graph (numpy), Kontraktion, Speichern/Laden
+  costing.py    Kostenmodell (vektorisiert, cachebar je Profil/Regler)
+  router.py     Snapping + A* + Ergebnisaufbereitung
+  geocoder.py   Offline-Ortssuche
+  gpx.py        GPX-Export
+  api.py        FastAPI (+ statische Weboberfläche in web/)
+  cli.py        download | dem | build | serve | route | info
+tests/          pytest inkl. synthetischem Testnetz (tests/fixture.py)
+```
+
+Tests: `pytest -q`.
+
+## Bekannte Grenzen
+
+* Keine Turn-by-Turn-Ansagen (Planung + Export); Routen-Beschreibung nach Straßennamen wäre ein möglicher nächster Schritt.
+* Qualität hängt an OSM: fehlende `cycleway=*`-/`surface=*`-Tags führen zu Annahmen (Oberfläche wird aus Wegtyp abgeleitet).
+* Höhen: SRTM (30 m) ist gröber als Bayerns Laserscan-Höhenmodell; Brücken/Tunnel werden linear interpoliert.
+* Verkehrsmenge ist in OSM nicht enthalten – Straßenklasse und Tempolimit sind der Ersatz.
+* `bicycle=use_sidepath` wird nicht verboten, sondern stark bestraft (falls der Radweg nebenan in OSM fehlt).
+* Routen sind Vorschläge; Beschilderung und Verkehrsregeln vor Ort haben Vorrang.
+
+## Lizenzen & Daten
+
+Kartendaten © [OpenStreetMap-Mitwirkende](https://www.openstreetmap.org/copyright) (ODbL) – die Attribution wird in der
+Oberfläche angezeigt und muss bei öffentlichem Betrieb erhalten bleiben. Höhen: SRTM (NASA/USGS) via AWS Terrain Tiles.
+Leaflet: BSD-2-Clause (`web/vendor/LEAFLET-LICENSE`). Eine Lizenz für den FahrradNavi-Code selbst ist noch festzulegen.
