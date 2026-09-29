@@ -72,6 +72,14 @@ API: `avoid_areas` (Kreis `{kind:"circle",lat,lon,radius_m,strength}` / Polygon 
 (`{coords:[{lat,lon}…],strength}`), `loop` und `roundtrip` (`{distance_km,heading}`) in `POST /api/route` und `/api/gpx`.
 Grenzen: 20 Bereiche, 300 Polygonpunkte, Radius ≤ 50 km, 10 Lieblingswege mit zusammen ≤ 20 000 Punkten, Anfrage ≤ 3 MB.
 
+![Lieblingsweg und gemiedene Innenstadt](docs/lieblingsweg-innenstadt.png)
+
+*Violett: Lieblingsweg (GPX), roter Kreis: gemiedener Bereich um die Innenstadt, grau gestrichelt: Route ohne Overlays, farbig: Ergebnis.*
+
+![Rundreisen ab Starnberg, Wunsch 35 km](docs/rundreise-35km.png)
+
+*Drei Rundreisen ab der Leutstettener Straße (Wunsch 35 km): 34,3 / 33,8 / 39,0 km, Richtungen 300° / 60° / 0°.*
+
 Browser-Rauchtest der Bedienung (Playwright): `python scripts/ui_smoke.py` (29 Prüfungen auf Testnetzen).
 
 ## Innenstadt meiden
