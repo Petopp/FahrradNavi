@@ -81,7 +81,9 @@ class OsmBuilder:
             out.append("</way>")
         for rid, members, tags in self.relations:
             out.append(f'<relation id="{rid}" version="1">')
-            out += [f'<member type="way" ref="{m}" role=""/>' for m in members]
+            for m in members:
+                ref, role = m if isinstance(m, tuple) else (m, "")
+                out.append(f'<member type="way" ref="{ref}" role="{role}"/>')
             out += [f'<tag k="{k}" v="{v}"/>' for k, v in tags.items()]
             out.append("</relation>")
         out.append("</osm>")

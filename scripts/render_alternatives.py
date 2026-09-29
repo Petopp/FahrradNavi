@@ -29,6 +29,7 @@ def main() -> None:
     ap.add_argument("--profile", default="trekking")
     ap.add_argument("--avoid", type=float, default=1.0)
     ap.add_argument("--calm", type=float, default=1.0)
+    ap.add_argument("--urban", type=float, default=0.0, help="Bebauung meiden 0..3")
     ap.add_argument("--alts", type=int, default=3)
     ap.add_argument("--via", action="append", default=[], help="Wunschroute durch diese Punkte (schwarz gestrichelt)")
     ap.add_argument("--zoom", type=int, default=14)
@@ -48,7 +49,7 @@ def main() -> None:
             return h["lat"], h["lon"]
 
     A, B = res(a.start), res(a.end)
-    opts = Options(avoid_roads=a.avoid, calm=a.calm)
+    opts = Options(avoid_roads=a.avoid, calm=a.calm, urban=a.urban)
     routes = r.alternatives([A, B], a.profile, opts, n=a.alts)
     wish = r.route([A] + [res(v) for v in a.via] + [B], a.profile, opts) if a.via else None
     allr = routes + ([wish] if wish else [])
@@ -95,17 +96,17 @@ def main() -> None:
         s = x.stats
         exp = 4 * s["road_m"] + s["calm_m"]
         dr.rectangle([10, y + 4, 40, y + 12], fill=PALETTE[i % len(PALETTE)])
-        dr.text((50, y), f"Route {i + 1}: {s['distance_m']/1000:.1f} km | Autostrasse {s['road_m']/1000:.2f} km | Wohnstrasse {s['calm_m']/1000:.2f} km | +{s['ascent_m']} m", fill=(30, 35, 32), font=font)
+        dr.text((50, y), f"Route {i + 1}: {s['distance_m']/1000:.1f} km | Autostrasse {s['road_m']/1000:.2f} km | Wohnstrasse {s['calm_m']/1000:.2f} km | Bebauung {s['urban_m']/1000:.1f} km | +{s['ascent_m']} m", fill=(30, 35, 32), font=font)
         y += 26
     if wish:
         s = wish.stats
         dr.line([(10, y + 8), (40, y + 8)], fill=(20, 20, 20), width=3)
-        dr.text((50, y), f"Wunschroute: {s['distance_m']/1000:.1f} km | Autostrasse {s['road_m']/1000:.2f} km | Wohnstrasse {s['calm_m']/1000:.2f} km | +{s['ascent_m']} m", fill=(30, 35, 32), font=font)
+        dr.text((50, y), f"Wunschroute: {s['distance_m']/1000:.1f} km | Autostrasse {s['road_m']/1000:.2f} km | Wohnstrasse {s['calm_m']/1000:.2f} km | Bebauung {s['urban_m']/1000:.1f} km | +{s['ascent_m']} m", fill=(30, 35, 32), font=font)
     dr.text((canvas.width - 250, canvas.height - 22), "© OpenStreetMap-Mitwirkende", fill=(90, 95, 92), font=font)
     canvas.save(a.out)
     print("gespeichert:", a.out, canvas.size)
     for i, x in enumerate(routes):
-        print(f"  Route {i + 1}: {x.stats['distance_m']/1000:.1f} km, Autostrasse {x.stats['road_m']/1000:.2f}, Wohnstrasse {x.stats['calm_m']/1000:.2f}")
+        print(f"  Route {i + 1}: {x.stats['distance_m']/1000:.1f} km, Autostrasse {x.stats['road_m']/1000:.2f}, Wohnstrasse {x.stats['calm_m']/1000:.2f}, Bebauung {x.stats['urban_m']/1000:.1f}")
 
 
 if __name__ == "__main__":

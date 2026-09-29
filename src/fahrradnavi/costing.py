@@ -8,7 +8,7 @@ import numpy as np
 
 from . import tags as T
 from .graph import Graph
-from .profiles import CAR_PENALTY, INFRA_EXPONENT, Options, Profile
+from .profiles import CAR_PENALTY, INFRA_EXPONENT, URBAN_PENALTY, Options, Profile
 
 INF = float("inf")
 
@@ -59,6 +59,10 @@ def compute_costs(g: Graph, profile: Profile, opts: Options) -> Costs:
     surf = surf ** opts.surface
     smooth = smooth ** opts.surface
     factor = cf * pen * surf * smooth
+
+    if g.has_urban and opts.urban > 0:
+        # Anteil der Kante innerhalb von Siedlungsflächen: 0 -> Faktor 1, 1 -> voller Bebauungs-Malus
+        factor = factor * (1.0 + (URBAN_PENALTY**opts.urban - 1.0) * (g.e_urban / 255.0))
 
     route = (g.e_flags & T.FLAG_ROUTE) != 0
     factor = np.where(route, factor * opts.route_bonus, factor)

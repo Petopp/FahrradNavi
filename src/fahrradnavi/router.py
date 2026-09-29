@@ -435,6 +435,7 @@ class Router:
         asc = desc = 0.0
         kind_len = {KIND_OWN: 0.0, KIND_CALM: 0.0, KIND_ROAD: 0.0}
         unpaved = 0.0
+        urban = 0.0
         signals = 0
         prof_pts: list[list[float]] = []
         surf_f = np.array(prof.surface_factor)
@@ -450,6 +451,7 @@ class Router:
                 name = g.names[int(g.e_name[e])]
                 fl = int(g.e_flags[e])
                 kind_len[kind] += length
+                urban += length * float(g.e_urban[e]) / 255.0
                 if surf >= T.SURF_GRAVEL:
                     unpaved += length
                 pushing = bool(fl & T.FLAG_DISMOUNT) or hwc == T.HW_FOOTWAY
@@ -517,6 +519,7 @@ class Router:
             "calm_m": round(kind_len[KIND_CALM], 1),
             "own_m": round(kind_len[KIND_OWN], 1),
             "unpaved_m": round(unpaved, 1),
+            "urban_m": round(urban, 1),
             "signals": signals,
             "has_elevation": g.has_elevation,
             "snap_distance_m": [round(s.distance_m, 1) for s in res.snaps],

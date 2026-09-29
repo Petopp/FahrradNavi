@@ -46,6 +46,10 @@ CAR_PENALTY: dict[int, float] = {
     T.HW_SERVICE: 2.0,
 }
 
+# Bebauung meiden: Kosten-Faktor für Wege komplett innerhalb von Siedlungsflächen (landuse=residential/
+# commercial/retail/industrial) bei Regler 1; mit dem Regler wird potenziert (2 -> 6,25; 3 -> 15,6).
+URBAN_PENALTY = 2.5
+
 # Exponent, mit dem der Auto-Malus je nach Radinfrastruktur abgeschwächt wird
 INFRA_EXPONENT = {
     T.INFRA_NONE: 1.0,
@@ -142,6 +146,8 @@ class Options:
 
     avoid_roads:  Stärke des Straßen-Meidens. 0 = egal, 1 = konsequent (Standard),
                   >1 = noch schärfer.
+    urban:        Bebauung meiden: Wege innerhalb von Siedlungsflächen werden teurer (0 = aus, 1 = ×2,5,
+                  2 = ×6, 3 = ×16 für Wege, die komplett in Bebauung liegen). Braucht Flächendaten im Graphen.
     calm:         Zusätzliche Skalierung nur für Wohnstraßen, Spielstraßen und Zufahrten
                   (Exponent des Malus; 0 = egal, 1 = Standard, 2-3 = möglichst nie durch Wohngebiete).
     hills:        Skalierung der Steigungs-Abneigung. 0 = Steigungen egal, 1 = Profil-Standard.
@@ -152,13 +158,14 @@ class Options:
 
     avoid_roads: float = 1.0
     calm: float = 1.0
+    urban: float = 0.0
     hills: float = 1.0
     surface: float = 1.0
     signal_cost: float = 30.0
     route_bonus: float = 0.85
 
     def key(self) -> tuple:
-        return (self.avoid_roads, self.calm, self.hills, self.surface, self.signal_cost, self.route_bonus)
+        return (self.avoid_roads, self.calm, self.urban, self.hills, self.surface, self.signal_cost, self.route_bonus)
 
 
 def get_profile(name: str) -> Profile:

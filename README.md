@@ -4,7 +4,7 @@ Fahrrad-Routenplaner auf Basis von [OpenStreetMap](https://www.openstreetmap.org
 auch wenn dafür ein Umweg von mehreren Kilometern nötig ist. Reines Python, selbst hostbar, mit Weboberfläche
 und GPX-Export (z. B. für Komoot, Garmin, Wahoo, OsmAnd).
 
-> **Stand:** Prototyp. Kernlogik, API und Weboberfläche sind getestet (48 Tests mit synthetischem Testnetz, Browser-Test)
+> **Stand:** Prototyp. Kernlogik, API und Weboberfläche sind getestet (59 Tests mit synthetischem Testnetz, Browser-Test)
 > und mit echten OSM-Daten des Landkreises Starnberg geprüft. Beispiel *Starnberg → Kloster Andechs* (Trekkingrad):
 > 16,4 km mit 0,3 km Autostraße – die kürzeste Route (14,6 km) hätte 6,1 km auf Autostraßen. Ganz Bayern ist noch nicht
 > gebaut/gemessen, siehe [Skalierung](#skalierung-auf-ganz-bayern).
@@ -46,7 +46,17 @@ Die Weboberfläche zeigt zum Vergleich immer die **kürzeste Route** (grau gestr
 dafür 3,8 km weniger Autostraße"*.
 
 **Regler** (Web und API): *Straßen meiden* 0 (egal) … 1 (konsequent) … 2 (extrem), *Wohnstraßen meiden* 0 … 3 (zusätzlich, nur
-Wohn-/Spielstraßen und Zufahrten), *Steigungen meiden* und *schlechten Belag meiden* je 0 … 3. Profile: `trekking`, `road` (Rennrad), `gravel`, `ebike`.
+Wohn-/Spielstraßen und Zufahrten), *Bebauung meiden* 0 … 3 (siehe unten), *Steigungen meiden* und *schlechten Belag meiden* je 0 … 3. Profile: `trekking`, `road` (Rennrad), `gravel`, `ebike`.
+
+## Bebauung meiden
+
+Der Regler *Bebauung meiden* macht Wege innerhalb von **Siedlungsflächen** teurer – auch Radwege und Geh-/Radwege, die für das
+Straßen-Modell "sauber" aussehen. Grundlage sind die OSM-Flächen `landuse=residential/commercial/retail/industrial`
+(inkl. Multipolygone mit Löchern). Beim Graph-Bau wird für jede Kante der Anteil bestimmt, der in Bebauung liegt; zur Laufzeit
+gilt Faktor `1 + (2,5^Regler − 1) × Bebauungsanteil` (Regler 1 → ×2,5, 2 → ×6, 3 → ×16 für Wege komplett in Bebauung).
+Die Statistik zeigt zusätzlich die Kilometer in Bebauung. Der Regler wird in der Weboberfläche ausgeblendet, wenn der Graph
+keine Flächendaten enthält (dann neu bauen). Geofabrik-Extrakte enthalten die Flächen; der Overpass-Download holt sie mit.
+**Achtung:** Das Graph-Format hat sich geändert (Version 2) – vorhandene `graph.npz` bitte mit `fahrradnavi build` neu bauen.
 
 ## Alternativen und Route erklären
 

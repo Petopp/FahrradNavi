@@ -48,6 +48,43 @@ class RawData:
     names: list[str]
     signal_ids: np.ndarray  # int64
     places: list[tuple[str, str, int, float, float]] = field(default_factory=list)
+    # Siedlungsflächen: [(äußerer Ring (N,2) lon/lat, [Löcher])]
+    urban_rings: list = field(default_factory=list)
+
+
+URBAN_LANDUSE = ("residential", "commercial", "retail", "industrial")
+
+
+def read_urban_areas(path: str, bbox: tuple[float, float, float, float] | None = None) -> list:
+    """Siedlungsflächen (landuse=residential/commercial/retail/industrial) als Polygonringe.
+
+    Nutzt die Flächen-Zusammensetzung von osmium (geschlossene Wege und Multipolygon-Relationen).
+    """
+    import osmium
+
+    tag_filter = osmium.filter.TagFilter(*[("landuse", v) for v in URBAN_LANDUSE])
+    fp = osmium.FileProcessor(path).with_locations(_location_store(path)).with_areas(tag_filter).with_filter(tag_filter)
+    out = []
+    for o in fp:
+        if not o.is_area():
+            continue
+        for outer in o.outer_rings():
+            ring = np.array([(n.lon, n.lat) for n in outer if n.location.valid()], dtype=np.float64)
+            if len(ring) < 4:
+                continue
+            if bbox is not None and (
+                ring[:, 0].max() < bbox[0] or ring[:, 0].min() > bbox[2]
+                or ring[:, 1].max() < bbox[1] or ring[:, 1].min() > bbox[3]
+            ):
+                continue
+            holes = []
+            for inner in o.inner_rings(outer):
+                h = np.array([(n.lon, n.lat) for n in inner if n.location.valid()], dtype=np.float64)
+                if len(h) >= 4:
+                    holes.append(h)
+            out.append((ring, holes))
+    log.info("  %d Siedlungsflächen", len(out))
+    return out
 
 
 def place_info(tags: dict[str, str]) -> tuple[str, int] | None:
@@ -94,7 +131,7 @@ def _tags(o) -> dict[str, str]:
     return {t.k: t.v for t in o.tags}
 
 
-def read_osm(path: str, bbox: tuple[float, float, float, float] | None = None) -> RawData:
+def read_osm(path: str, bbox: tuple[float, float, float, float] | None = None, urban: bool = True) -> RawData:
     """Liest die Datei und gibt die rohen Wege zurück.
 
     bbox = (min_lon, min_lat, max_lon, max_lat): Wege, die komplett außerhalb liegen, werden verworfen.
@@ -195,6 +232,10 @@ def read_osm(path: str, bbox: tuple[float, float, float, float] | None = None) -
                 places.append((nm, "street", 0, r_lat[mid] / E7, r_lon[mid] / E7))
 
     log.info("  %d Wege, %d Vertices, %d Ampeln, %d Orte", n_ways, len(refs), len(signals), len(places))
+    urban_rings: list = []
+    if urban:
+        log.info("Pass 3: Siedlungsflächen")
+        urban_rings = read_urban_areas(path, bbox)
 
     def np_(a: array, dt) -> np.ndarray:
         return np.frombuffer(a, dtype=a.typecode).astype(dt) if len(a) else np.zeros(0, dt)
@@ -216,4 +257,5 @@ def read_osm(path: str, bbox: tuple[float, float, float, float] | None = None) -
         names=names,
         signal_ids=np.unique(np_(signals, np.int64)),
         places=places,
+        urban_rings=urban_rings,
     )

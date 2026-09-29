@@ -97,13 +97,15 @@ def cmd_route(a: argparse.Namespace) -> None:
     r = Router(g)
     gc = Geocoder(g.places)
     pts = [_resolve(x, gc) for x in [a.start] + list(a.via or []) + [a.end]]
-    opts = Options(avoid_roads=a.avoid, calm=a.calm, hills=a.hills, surface=a.surface)
+    opts = Options(avoid_roads=a.avoid, calm=a.calm, urban=a.urban, hills=a.hills, surface=a.surface)
     res = r.route(pts, a.profile, opts, compare=True)
     s = res.stats
     print(f"Strecke:      {s['distance_m'] / 1000:.2f} km")
     print(f"Dauer:        {s['duration_s'] / 60:.0f} min")
     print(f"Höhenmeter:   +{s['ascent_m']} m / -{s['descent_m']} m")
     print(f"Autostraße:   {s['road_m'] / 1000:.2f} km  (ruhig: {s['calm_m'] / 1000:.2f} km, eigener Weg: {s['own_m'] / 1000:.2f} km)")
+    if g.has_urban:
+        print(f"Bebauung:     {s['urban_m'] / 1000:.2f} km innerhalb von Siedlungsflächen")
     if "detour_m" in s:
         print(f"Umweg gegenüber Standard-Routing: {s['detour_m'] / 1000:+.2f} km "
               f"(Standard hätte {s['baseline']['road_m'] / 1000:.2f} km Autostraße)")
@@ -125,7 +127,7 @@ def cmd_explain(a: argparse.Namespace) -> None:
     gc = Geocoder(g.places)
     start, end = _resolve(a.start, gc), _resolve(a.end, gc)
     vias = [_resolve(x, gc) for x in (a.via or [])]
-    opts = Options(avoid_roads=a.avoid, calm=a.calm, hills=a.hills, surface=a.surface)
+    opts = Options(avoid_roads=a.avoid, calm=a.calm, urban=a.urban, hills=a.hills, surface=a.surface)
     out = explain.compare(r, [start, end], [start] + vias + [end], a.profile, opts)
     for label, key in (("Vom Router gewählte Route", "free"), ("Route durch deine Zwischenpunkte", "via")):
         res = out[key]
@@ -196,6 +198,7 @@ def main(argv: list[str] | None = None) -> None:
     r.add_argument("--profile", choices=list(PROFILES), default=DEFAULT_PROFILE)
     r.add_argument("--avoid", type=float, default=1.0, help="Straßen-Meidung 0..2 (Standard 1)")
     r.add_argument("--calm", type=float, default=1.0, help="Wohnstraßen zusätzlich meiden 0..3 (Standard 1)")
+    r.add_argument("--urban", type=float, default=0.0, help="Bebauung meiden 0..3 (Standard 0 = aus)")
     r.add_argument("--hills", type=float, default=1.0)
     r.add_argument("--surface", type=float, default=1.0)
     r.add_argument("--gpx", help="GPX-Datei schreiben")
@@ -209,6 +212,7 @@ def main(argv: list[str] | None = None) -> None:
     x.add_argument("--profile", choices=list(PROFILES), default=DEFAULT_PROFILE)
     x.add_argument("--avoid", type=float, default=1.0)
     x.add_argument("--calm", type=float, default=1.0)
+    x.add_argument("--urban", type=float, default=0.0)
     x.add_argument("--hills", type=float, default=1.0)
     x.add_argument("--surface", type=float, default=1.0)
     x.add_argument("--min-length", type=float, default=0.0, help="kürzere Abschnitte (m) ausblenden")

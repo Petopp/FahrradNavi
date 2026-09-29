@@ -60,13 +60,18 @@ def geofabrik_url(region: str) -> str:
     raise ValueError(f"Unbekannte Geofabrik-Region {region!r}; erlaubt: bayern, {', '.join(BAYERN_REGIONS)}")
 
 
+LANDUSE_URBAN = "residential|commercial|retail|industrial"
+
+
 def overpass_query(bbox: tuple[float, float, float, float]) -> str:
-    """Overpass-QL: alle Wege mit highway=*, Ampeln, benannte Orte und Radrouten-Relationen im Gebiet."""
+    """Overpass-QL: Wege (highway=*), Ampeln, benannte Orte, Siedlungsflächen (landuse) und Radrouten-Relationen."""
     s, w, n, e = bbox[1], bbox[0], bbox[3], bbox[2]
     b = f"{s},{w},{n},{e}"
     return f"""[out:xml][timeout:900];
 (
   way["highway"]({b});
+  way["landuse"~"^({LANDUSE_URBAN})$"]({b});
+  rel["landuse"~"^({LANDUSE_URBAN})$"]({b});
   node["highway"="traffic_signals"]({b});
   node["place"]["name"]({b});
   node["tourism"]["name"]({b});
@@ -74,7 +79,7 @@ def overpass_query(bbox: tuple[float, float, float, float]) -> str:
   node["amenity"~"^(monastery|place_of_worship|restaurant|cafe|biergarten|pub|townhall|bicycle_repair_station)$"]["name"]({b});
   node["railway"~"^(station|halt)$"]["name"]({b});
 );
-(._;>;);
+(._;>>;);
 out body;
 rel["route"="bicycle"]({b});
 out body;
