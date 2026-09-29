@@ -37,6 +37,7 @@ def main() -> None:
     ap.add_argument("--avoid", type=float, default=1.0)
     ap.add_argument("-o", "--out", default="data/route.png")
     ap.add_argument("--zoom", type=int, default=13)
+    ap.add_argument("--via", action="append", default=[], help="Zwischenpunkt (lat,lon oder Ortsname); dann wird die freie Route gestrichelt daneben gezeichnet")
     a = ap.parse_args()
 
     g = Graph.load(a.graph)
@@ -51,9 +52,13 @@ def main() -> None:
             h = gc.search(s, limit=1)[0]
             return h["lat"], h["lon"]
 
-    pts = [res(a.start), res(a.end)]
-    route = r.route(pts, a.profile, Options(avoid_roads=a.avoid), compare=True)
+    pts = [res(a.start)] + [res(v) for v in a.via] + [res(a.end)]
+    route = r.route(pts, a.profile, Options(avoid_roads=a.avoid), compare=not a.via)
     st = route.stats
+    if a.via:  # gestrichelt: was der Router ohne Zwischenpunkte wählen würde
+        free = r.route([pts[0], pts[-1]], a.profile, Options(avoid_roads=a.avoid))
+        route.stats["baseline_coords"] = free.coords
+        route.stats["baseline"] = {"road_m": free.stats["road_m"], "distance_m": free.stats["distance_m"]}
 
     lats = [c[1] for c in route.coords]
     lons = [c[0] for c in route.coords]
@@ -93,7 +98,8 @@ def main() -> None:
         p = [tuple(v * S for v in px(lo, la)) for lo, la in seg["coords"]]
         if len(p) > 1:
             d.line(p, fill=COLORS[seg["kind"]] + (255,), width=5 * S, joint="curve")
-    for (lat, lon), label, col in ((pts[0], "A", (31, 157, 85)), (pts[1], "B", (214, 60, 60))):
+    marks = [(pts[0], "A", (31, 157, 85))] + [(v, str(i + 1), (59, 111, 212)) for i, v in enumerate(pts[1:-1])] + [(pts[-1], "B", (214, 60, 60))]
+    for (lat, lon), label, col in marks:
         x, y = px(lon, lat)
         x, y = x * S, y * S
         d.ellipse([x - 13 * S, y - 13 * S, x + 13 * S, y + 13 * S], fill=col + (255,), outline=(255, 255, 255, 255), width=2 * S)
@@ -108,8 +114,9 @@ def main() -> None:
     # Legende unten
     dr = ImageDraw.Draw(out)
     f = ImageFont.load_default(size=15)
+    ref = "frei gewaehlt" if a.via else "kuerzeste Route"
     txt = (f"{a.start} -> {a.end}  |  {st['distance_m']/1000:.1f} km, {st['duration_s']//60} min, +{st['ascent_m']} m  |  "
-           f"Autostrasse {st['road_m']/1000:.1f} km (kuerzeste Route: {st['baseline']['road_m']/1000:.1f} km auf {st['baseline']['distance_m']/1000:.1f} km)")
+           f"Autostrasse {st['road_m']/1000:.1f} km ({ref}: {st['baseline']['road_m']/1000:.1f} km auf {st['baseline']['distance_m']/1000:.1f} km)")
     dr.rectangle([0, out.height - 54, out.width, out.height], fill=(255, 255, 255))
     dr.text((10, out.height - 50), txt, fill=(30, 35, 32), font=f)
     x = 10
@@ -118,7 +125,7 @@ def main() -> None:
         dr.text((x + 28, out.height - 28), label, fill=(60, 65, 62), font=f)
         x += 28 + int(dr.textlength(label, font=f)) + 22
     dr.line([(x, out.height - 19), (x + 26, out.height - 19)], fill=(90, 95, 110), width=3)
-    dr.text((x + 32, out.height - 28), "kuerzeste Route", fill=(60, 65, 62), font=f)
+    dr.text((x + 32, out.height - 28), "vom Router gewaehlt" if a.via else "kuerzeste Route", fill=(60, 65, 62), font=f)
     dr.text((out.width - 250, out.height - 28), "© OpenStreetMap-Mitwirkende", fill=(90, 95, 92), font=f)
     out.save(a.out)
     print("gespeichert:", a.out, out.size)

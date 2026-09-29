@@ -18,6 +18,7 @@ ROAD_KIND_THRESHOLD = 6.0
 KIND_OWN = 0  # eigener Weg / Radweg / baulich getrennt
 KIND_CALM = 1  # ruhige Straße
 KIND_ROAD = 2  # Autostraße ohne eigenen Radweg
+KIND_LABELS_DE = {KIND_OWN: "eigener Weg", KIND_CALM: "ruhig", KIND_ROAD: "Autostraße"}
 
 
 @dataclass
@@ -99,7 +100,9 @@ def compute_costs(g: Graph, profile: Profile, opts: Options) -> Costs:
     strict = road_penalty(g, Options(avoid_roads=1.0))
     kind[car & (strict > 1.0001)] = KIND_CALM
     kind[car & (strict >= ROAD_KIND_THRESHOLD)] = KIND_ROAD
+    # Wohn-/Spielstraßen und Zufahrten bleiben "ruhig", auch wenn ihr Malus hoch eingestellt wird
     kind[(g.e_hwc == T.HW_LIVING_STREET) | (g.e_hwc == T.HW_SERVICE)] = KIND_CALM
+    kind[(g.e_hwc == T.HW_RESIDENTIAL) & (strict > 1.0001) & (g.e_infra < T.INFRA_TRACK)] = KIND_CALM
 
     # Untere Schranke für Kosten/Meter (Faktor); Ampeln/Steigung addieren nur.
     min_pm = float(min(np.min(factor), 1.0)) if len(factor) else 1.0

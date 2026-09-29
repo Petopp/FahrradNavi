@@ -113,6 +113,39 @@ def cmd_route(a: argparse.Namespace) -> None:
         print("GPX:", a.gpx)
 
 
+def cmd_explain(a: argparse.Namespace) -> None:
+    """Vergleicht die frei berechnete Route mit einer Route durch feste Zwischenpunkte."""
+    from . import explain
+    from .geocoder import Geocoder
+    from .graph import Graph
+    from .router import Router
+
+    g = Graph.load(a.graph)
+    r = Router(g)
+    gc = Geocoder(g.places)
+    start, end = _resolve(a.start, gc), _resolve(a.end, gc)
+    vias = [_resolve(x, gc) for x in (a.via or [])]
+    opts = Options(avoid_roads=a.avoid, hills=a.hills, surface=a.surface)
+    out = explain.compare(r, [start, end], [start] + vias + [end], a.profile, opts)
+    for label, key in (("Vom Router gewählte Route", "free"), ("Route durch deine Zwischenpunkte", "via")):
+        res = out[key]
+        s = res.stats
+        print(f"\n=== {label}: {s['distance_m'] / 1000:.1f} km, Kosten {res.cost / 1000:.1f}k, "
+              f"Autostraße {s['road_m'] / 1000:.2f} km, ruhig {s['calm_m'] / 1000:.2f} km, +{s['ascent_m']} m")
+        print(explain.format_rows(out[key + "_rows"], min_length=a.min_length))
+    print(f"\nDeine Route kostet {out['extra_cost'] / 1000:+.1f}k Meter-Äquivalente ({out['extra_pct']:+.0f} %) gegenüber der gewählten.")
+    worst = sorted(explain.merge_rows(out["via_rows"]), key=lambda r_: r_.excess_cost, reverse=True)[:6]
+    print("Größte Kostentreiber auf deiner Route (Aufpreis über der reinen Länge):")
+    for w in worst:
+        print(f"  {w.name[:34]:34s} {w.highway:12s} {w.surface:10s} {w.length_m:5.0f} m  Malus {w.road_penalty:5.1f}  Aufpreis {w.excess_cost:6.0f}")
+    if a.gpx:
+        from .gpx import route_to_gpx
+
+        with open(a.gpx, "w", encoding="utf-8") as f:
+            f.write(route_to_gpx(out["via"].coords, name="FahrradNavi Wunschroute"))
+        print("GPX deiner Route:", a.gpx)
+
+
 def cmd_info(a: argparse.Namespace) -> None:
     from .graph import Graph
 
@@ -166,6 +199,19 @@ def main(argv: list[str] | None = None) -> None:
     r.add_argument("--surface", type=float, default=1.0)
     r.add_argument("--gpx", help="GPX-Datei schreiben")
     r.set_defaults(func=cmd_route)
+
+    x = sub.add_parser("explain", help="Route erklären: gewählte Route vs. Route durch feste Zwischenpunkte")
+    x.add_argument("--graph", default="data/graph.npz")
+    x.add_argument("--from", dest="start", type=_place, required=True, metavar="LAT,LON|ORT")
+    x.add_argument("--to", dest="end", type=_place, required=True, metavar="LAT,LON|ORT")
+    x.add_argument("--via", type=_place, action="append", metavar="LAT,LON|ORT")
+    x.add_argument("--profile", choices=list(PROFILES), default=DEFAULT_PROFILE)
+    x.add_argument("--avoid", type=float, default=1.0)
+    x.add_argument("--hills", type=float, default=1.0)
+    x.add_argument("--surface", type=float, default=1.0)
+    x.add_argument("--min-length", type=float, default=0.0, help="kürzere Abschnitte (m) ausblenden")
+    x.add_argument("--gpx", help="GPX der Route durch die Zwischenpunkte schreiben")
+    x.set_defaults(func=cmd_explain)
 
     i = sub.add_parser("info", help="Graph-Infos")
     i.add_argument("--graph", default="data/graph.npz")
