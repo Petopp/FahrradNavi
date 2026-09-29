@@ -459,6 +459,125 @@ class Router:
     def _edges(res: RouteResult) -> list[int]:
         return [p.edge for leg in res.legs for p in leg.pieces if len(p.lat) > 1]
 
+    # -- Rundreisen -------------------------------------------------------
+    def _route_progressive(
+        self, points: list[tuple[float, float]], prof: Profile, opts: Options, overlays: Overlays | None, penalty: float = 2.5,
+    ) -> tuple[RouteResult, float]:
+        """Wie ``route``, aber Kanten früherer Teilstrecken sind für spätere teurer (vermeidet Hin-und-zurück).
+
+        Rückgabe: (Ergebnis, Überlappungsanteil 0..1 nach Länge)."""
+        costs = self.effective_costs(prof, opts, overlays)
+        snaps = [self.snap(la, lo, costs) for la, lo in points]
+        snaps[-1] = snaps[0] if points[-1] == points[0] else snaps[-1]
+        legs: list[Leg] = []
+        used: set[int] = set()
+        for i in range(len(snaps) - 1):
+            use = costs
+            if used:
+                c = costs.cost.copy()
+                idx = np.fromiter(used, dtype=np.int64)
+                c[2 * idx] *= penalty
+                c[2 * idx + 1] *= penalty
+                use = self._prepare(Costs(cost=c, min_per_meter=costs.min_per_meter, factor=costs.factor, kind=costs.kind))
+            leg = self._leg(snaps[i], snaps[i + 1], use)
+            leg.cost = sum(float(costs.cost[2 * p.edge + int(p.reverse)]) * p.share for p in leg.pieces)
+            legs.append(leg)
+            used |= {p.edge for p in leg.pieces if len(p.lat) > 1}
+        res = RouteResult(legs=legs, snaps=snaps, profile=prof, options=opts, cost=sum(l.cost for l in legs))
+        self._summarize(res, costs, points)
+        seen: dict[int, int] = {}
+        for leg in legs:
+            for e in {p.edge for p in leg.pieces if len(p.lat) > 1}:
+                seen[e] = seen.get(e, 0) + 1
+        g = self.g
+        rep = sum(float(g.e_len[e]) for e, k in seen.items() if k > 1)
+        tot = sum(float(g.e_len[e]) for e in seen)
+        return res, rep / max(tot, 1.0)
+
+    def round_trips(
+        self,
+        start: tuple[float, float],
+        target_m: float,
+        profile: str | Profile = "trekking",
+        options: Options | None = None,
+        overlays: Overlays | None = None,
+        n: int = 3,
+        heading: float | None = None,
+        tolerance: float = 0.12,
+        exposure=None,
+    ) -> list[RouteResult]:
+        """Rundreisen ab ``start`` mit etwa ``target_m`` Länge.
+
+        Zwischenpunkte liegen auf einem Kreis, auf dem auch der Start liegt; der Radius wird iterativ so skaliert, dass die
+        tatsächliche Länge zur Wunschlänge passt. Bewertet wird nach Längenabweichung, Überlappung (Hin-und-zurück) und
+        Kosten pro Meter; zurückgegeben werden bis zu ``n`` deutlich verschiedene Schleifen, die beste zuerst.
+        ``heading``: bevorzugte Richtung (0 = Nord, 90 = Ost) des Rundkurs-Mittelpunkts vom Start aus.
+        """
+        prof = get_profile(profile) if isinstance(profile, str) else profile
+        opts = options or Options()
+        lat0, lon0 = start
+        kx = 111_320.0 * math.cos(math.radians(lat0))
+        ky = 110_574.0
+        kappa = 1.35  # typisches Verhältnis Radweg-Länge / Luftlinien-Umfang
+
+        if heading is not None:
+            dirs = [(heading + off) % 360 for off in (0, -35, 35, -70, 70)]
+        else:
+            dirs = [d for d in range(0, 360, 60)]
+        shapes: list[tuple[float, int, int]] = []  # (Richtung, Anzahl Zwischenpunkte, Umlaufsinn)
+        for i, d in enumerate(dirs):
+            shapes.append((d, 3 if i % 2 == 0 else 2, 1 if (i // 2) % 2 == 0 else -1))
+
+        cands: list[tuple[RouteResult, float]] = []
+        errors = 0
+        for phi, m, sense in shapes:
+            per = (m + 1) * 2 * math.sin(math.pi / (m + 1))
+            radius = target_m / (kappa * per)
+            best_here: tuple[RouteResult, float] | None = None
+            for _ in range(3):
+                cx = radius * math.sin(math.radians(phi))
+                cy = radius * math.cos(math.radians(phi))
+                pts = [start]
+                for k in range(1, m + 1):
+                    th = math.radians(phi + 180.0 + sense * 360.0 * k / (m + 1))
+                    pts.append((lat0 + (cy + radius * math.cos(th)) / ky, lon0 + (cx + radius * math.sin(th)) / kx))
+                pts.append(start)
+                try:
+                    res, ovl = self._route_progressive(pts, prof, opts, overlays)
+                except NoRouteError:
+                    errors += 1
+                    break
+                length = res.stats["distance_m"]
+                if best_here is None or abs(length - target_m) < abs(best_here[0].stats["distance_m"] - target_m):
+                    best_here = (res, ovl)
+                if abs(length - target_m) / target_m <= tolerance:
+                    break
+                radius *= max(0.5, min(2.0, (target_m / max(length, 1.0)) ** 0.9))
+            if best_here is not None:
+                res, ovl = best_here
+                res.stats["roundtrip"] = {"target_m": round(target_m), "heading": round(phi), "overlap": round(ovl, 3)}
+                cands.append(best_here)
+        if not cands:
+            raise NoRouteError("Für diese Länge und Richtung liegt keine Rundreise im Kartengebiet.")
+
+        # Bewertung: Länge (wichtig), Überlappung, Kosten pro Meter relativ zur besten Kandidatin
+        per_m = [c.cost / max(c.stats["distance_m"], 1.0) for c, _ in cands]
+        q0 = min(per_m)
+        scored = []
+        for (c, ovl), q in zip(cands, per_m):
+            dev = abs(c.stats["distance_m"] - target_m) / target_m
+            exp_ = exposure(c) / max(c.stats["distance_m"], 1.0) if exposure else 0.0
+            scored.append((3.0 * dev + 2.0 * ovl + (q / q0 - 1.0) + exp_, c))
+        scored.sort(key=lambda t: t[0])
+        chosen: list[RouteResult] = []
+        for _, c in scored:
+            e = set(self._edges(c))
+            if all(len(e & set(self._edges(o))) / max(len(e), 1) < 0.6 for o in chosen):
+                chosen.append(c)
+            if len(chosen) >= n:
+                break
+        return chosen
+
     # -- Auswertung -----------------------------------------------------
     def _summarize(self, res: RouteResult, costs: Costs, points) -> None:
         g = self.g

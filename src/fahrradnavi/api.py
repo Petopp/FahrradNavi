@@ -109,6 +109,8 @@ def exposure_m(res: RouteResult) -> float:
 
 
 def label_routes(results: list[RouteResult]) -> list[str]:
+    if results and results[0].stats.get("roundtrip"):  # Rundreisen: Reihenfolge = Güte, Länge im Namen
+        return [f"Rundreise {i + 1}" for i in range(len(results))]
     best = min(range(len(results)), key=lambda i: (exposure_m(results[i]), results[i].stats["distance_m"]))
     short = min(range(len(results)), key=lambda i: results[i].stats["distance_m"])
     labels = []
@@ -211,6 +213,11 @@ def create_app(
             pts = pts + [pts[0]]
         overlays = req.overlays()
         try:
+            if req.roundtrip is not None:
+                return router.round_trips(
+                    pts[0], req.roundtrip.distance_km * 1000.0, req.profile, req.options(), overlays,
+                    n=max(1, req.alternatives), heading=req.roundtrip.heading, exposure=exposure_m,
+                )
             best = router.route(pts, req.profile, req.options(), compare=req.compare, overlays=overlays)
             if req.alternatives <= 0:
                 return [best]
@@ -231,7 +238,8 @@ def create_app(
         if len(results) == 1:
             return payloads[0]
         labels = label_routes(results)
-        rec = min(range(len(results)), key=lambda i: (exposure_m(results[i]), results[i].stats["distance_m"]))
+        rec = 0 if results[0].stats.get("roundtrip") else min(
+            range(len(results)), key=lambda i: (exposure_m(results[i]), results[i].stats["distance_m"]))
         for i, pl in enumerate(payloads):
             pl["label"] = labels[i]
             pl["exposure_m"] = round(exposure_m(results[i]), 1)
@@ -244,7 +252,8 @@ def create_app(
         res = results[min(req.pick, len(results) - 1)]
         p0, p1 = res.snaps[0], res.snaps[-1]
         wpts = [(p0.lat, p0.lon, "Start"), (p1.lat, p1.lon, "Ziel")]
-        name = f"FahrradNavi {PROFILES[req.profile].label} {res.stats['distance_m'] / 1000:.1f} km"
+        kind = "Rundreise" if req.roundtrip is not None or req.loop else PROFILES[req.profile].label
+        name = f"FahrradNavi {kind} {res.stats['distance_m'] / 1000:.1f} km"
         body = route_to_gpx(res.coords, name=name, waypoints=wpts)
         return Response(
             body,
