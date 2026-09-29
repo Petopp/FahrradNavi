@@ -4,7 +4,7 @@ Fahrrad-Routenplaner auf Basis von [OpenStreetMap](https://www.openstreetmap.org
 auch wenn dafür ein Umweg von mehreren Kilometern nötig ist. Reines Python, selbst hostbar, mit Weboberfläche
 und GPX-Export (z. B. für Komoot, Garmin, Wahoo, OsmAnd).
 
-> **Stand:** Prototyp. Kernlogik, API und Weboberfläche sind getestet (84 Tests mit synthetischem Testnetz, Browser-Test)
+> **Stand:** Prototyp. Kernlogik, API und Weboberfläche sind getestet (94 Tests mit synthetischem Testnetz, Browser-Test)
 > und mit echten OSM-Daten des Landkreises Starnberg geprüft. Beispiel *Starnberg → Kloster Andechs* (Trekkingrad):
 > 16,4 km mit 0,3 km Autostraße – die kürzeste Route (14,6 km) hätte 6,1 km auf Autostraßen. Ganz Bayern ist noch nicht
 > gebaut/gemessen, siehe [Skalierung](#skalierung-auf-ganz-bayern).
@@ -46,7 +46,24 @@ Die Weboberfläche zeigt zum Vergleich immer die **kürzeste Route** (grau gestr
 dafür 3,8 km weniger Autostraße"*.
 
 **Regler** (Web und API): *Straßen meiden* 0 (egal) … 1 (konsequent) … 2 (extrem), *Wohnstraßen meiden* 0 … 3 (zusätzlich, nur
-Wohn-/Spielstraßen und Zufahrten), *Bebauung meiden* 0 … 3 (siehe unten), *Steigungen meiden* und *schlechten Belag meiden* je 0 … 3. Profile: `trekking`, `road` (Rennrad), `gravel`, `ebike`.
+Wohn-/Spielstraßen und Zufahrten), *Innenstadt meiden* 0 … 3 und *Bebauung meiden* 0 … 3 (siehe unten), *Steigungen meiden* und *schlechten Belag meiden* je 0 … 3. Profile: `trekking`, `road` (Rennrad), `gravel`, `ebike`.
+
+## Innenstadt meiden
+
+Der Regler *Innenstadt meiden* macht Wege im **Kern einer Innenstadt** teurer – auch Radwege und Fußgängerzonen-Nähe ("Trubel"),
+nicht nur Straßen. Als Maß dient die **Dichte von Geschäften, Gastronomie, Kultur, Behörden und Fußgängerzonen** (OSM: `shop`,
+`amenity`, `tourism`, `highway=pedestrian`), mit Radius 120 m geglättet, plus schwach Einzelhandels-/Gewerbeflächen. Daraus
+entsteht je Kante ein Innenstadt-Wert 0…1; zur Laufzeit gilt Faktor `1 + (3^Regler − 1) × Wert` (Regler 1 → ×3, 2 → ×9, 3 → ×27
+im Kern). Kalibriert an Starnberg: Kern (Hauptstraße/Seepromenade) = 1, Bahnhof/See ≈ 0,4, Söcking/Percha = 0
+(Schwellwerte `CENTER_DENSITY_LOW/HIGH` in `urban.py`). Die Statistik zeigt die Kilometer im Innenstadt-Kern.
+
+![Was das Modell in Starnberg als Innenstadt wertet (rot)](docs/innenstadt-starnberg.png)
+
+*Blau: erkannte Geschäfte/Gastronomie, rot: Innenstadt-Wert.* Der Wert bildet den **Kern** ab, nicht jeden bebauten Ortsteil –
+dafür gibt es *Bebauung meiden*. POI-Daten kommen bei Geofabrik-Extrakten automatisch mit; beim Overpass-Download sind sie in der
+Abfrage enthalten. Einen vorhandenen Download nachträglich ergänzen:
+`fahrradnavi download starnberg --overpass --pois-only --out data/poi` und `fahrradnavi merge a.osm.pbf b.osm.pbf -o alles.osm.pbf`.
+Das Graph-Format hat sich geändert (Version 3) – vorhandene `graph.npz` mit `fahrradnavi build` neu bauen.
 
 ## Bebauung meiden
 

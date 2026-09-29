@@ -36,6 +36,7 @@ class RouteRequest(BaseModel):
     avoid_roads: float = Field(1.0, ge=0.0, le=2.0, description="Stärke des Straßen-Meidens (0 = egal, 1 = konsequent)")
     calm: float = Field(1.0, ge=0.0, le=3.0, description="Wohnstraßen/Zufahrten zusätzlich meiden (0 = egal)")
     urban: float = Field(0.0, ge=0.0, le=3.0, description="Bebauung meiden (0 = aus)")
+    center: float = Field(0.0, ge=0.0, le=3.0, description="Innenstadt meiden (0 = aus)")
     hills: float = Field(1.0, ge=0.0, le=3.0)
     surface: float = Field(1.0, ge=0.0, le=3.0)
     compare: bool = True
@@ -43,7 +44,7 @@ class RouteRequest(BaseModel):
     pick: int = Field(0, ge=0, le=5, description="Nur GPX: Index der gewünschten Route aus der Alternativenliste")
 
     def options(self) -> Options:
-        return Options(avoid_roads=self.avoid_roads, calm=self.calm, urban=self.urban, hills=self.hills, surface=self.surface)
+        return Options(avoid_roads=self.avoid_roads, calm=self.calm, urban=self.urban, center=self.center, hills=self.hills, surface=self.surface)
 
 
 # Straßenanteil als Rangkriterium: Autostraße wiegt 4x so schwer wie Wohnstraße. Länge zählt nicht mit –
@@ -52,12 +53,15 @@ ROAD_WEIGHT = 4.0
 
 
 URBAN_WEIGHT = 0.5  # nur wenn der Regler "Bebauung meiden" aktiv ist
+CENTER_WEIGHT = 1.0  # nur wenn der Regler "Innenstadt meiden" aktiv ist
 
 
 def exposure_m(res: RouteResult) -> float:
     e = ROAD_WEIGHT * res.stats["road_m"] + res.stats["calm_m"]
     if res.options.urban > 0:
         e += URBAN_WEIGHT * res.stats["urban_m"]
+    if res.options.center > 0:
+        e += CENTER_WEIGHT * res.stats["center_m"]
     return e
 
 
@@ -135,6 +139,7 @@ def create_app(
             "bbox": [min_lon, min_lat, max_lon, max_lat],
             "has_elevation": graph.has_elevation,
             "has_urban": graph.has_urban,
+            "has_center": graph.has_center,
             "auth": auth.enabled,
             "profiles": [{"id": p.name, "label": p.label} for p in PROFILES.values()],
             "default_profile": DEFAULT_PROFILE,

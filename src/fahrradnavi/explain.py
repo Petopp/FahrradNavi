@@ -32,6 +32,7 @@ class Row:
     total_cost: float  # Meter-Äquivalente
     excess_cost: float  # Kosten über der reinen Länge (Ursache des Umwegs-Aufpreises)
     urban: float = 0.0  # Anteil in Siedlungsfläche 0..1
+    center: float = 0.0  # Innenstadt-Wert 0..1
 
     @property
     def factor(self) -> float:
@@ -76,6 +77,7 @@ def explain(router: Router, res: RouteResult) -> list[Row]:
                     total_cost=total,
                     excess_cost=total - length,
                     urban=float(g.e_urban[e]) / 255.0,
+                    center=float(g.e_center[e]) / 255.0,
                 )
             )
     return rows
@@ -92,6 +94,7 @@ def merge_rows(rows: list[Row]) -> list[Row]:
             o.excess_cost += r.excess_cost
             o.hill_cost += r.hill_cost
             o.urban = (o.urban * (o.length_m - r.length_m) + r.urban * r.length_m) / max(o.length_m, 1e-9)
+            o.center = (o.center * (o.length_m - r.length_m) + r.center * r.length_m) / max(o.length_m, 1e-9)
             o.road_penalty = max(o.road_penalty, r.road_penalty)
         else:
             out.append(Row(**{k: getattr(r, k) for k in Row.__dataclass_fields__}))
@@ -99,17 +102,17 @@ def merge_rows(rows: list[Row]) -> list[Row]:
 
 
 def format_rows(rows: list[Row], min_length: float = 0.0) -> str:
-    lines = [f"{'Straße/Weg':30s} {'Typ':12s} {'Belag':10s} {'Art':10s} {'m':>6s} {'Straßen-Malus':>13s} {'Bebauung':>8s} {'Kosten/m':>8s} {'Aufpreis':>9s}"]
+    lines = [f"{'Straße/Weg':30s} {'Typ':12s} {'Belag':10s} {'Art':10s} {'m':>6s} {'Straßen-Malus':>13s} {'Bebauung':>8s} {'Innenst.':>8s} {'Kosten/m':>8s} {'Aufpreis':>9s}"]
     for r in merge_rows(rows):
         if r.length_m < min_length:
             continue
         lines.append(
             f"{r.name[:30]:30s} {r.highway:12s} {r.surface:10s} {r.kind:10s} {r.length_m:6.0f} "
-            f"{r.road_penalty:13.1f} {r.urban * 100:7.0f}% {r.factor:8.2f} {r.excess_cost:9.0f}"
+            f"{r.road_penalty:13.1f} {r.urban * 100:7.0f}% {r.center * 100:7.0f}% {r.factor:8.2f} {r.excess_cost:9.0f}"
         )
     tot_len = sum(r.length_m for r in rows)
     tot_cost = sum(r.total_cost for r in rows)
-    lines.append(f"{'SUMME':30s} {'':12s} {'':10s} {'':10s} {tot_len:6.0f} {'':13s} {'':8s} {tot_cost / max(tot_len, 1):8.2f} {tot_cost - tot_len:9.0f}")
+    lines.append(f"{'SUMME':30s} {'':12s} {'':10s} {'':10s} {tot_len:6.0f} {'':13s} {'':8s} {'':8s} {tot_cost / max(tot_len, 1):8.2f} {tot_cost - tot_len:9.0f}")
     return "\n".join(lines)
 
 

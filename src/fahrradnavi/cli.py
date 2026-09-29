@@ -43,14 +43,18 @@ def cmd_download(a: argparse.Namespace) -> None:
         bbox = a.bbox or (region or {}).get("bbox")
         if not bbox:
             sys.exit("Für --overpass wird --bbox oder eine Region mit fester bbox (z. B. starnberg) benötigt.")
-        dest = os.path.join(a.out, f"{a.region}.osm.pbf")
-        fetch.download_overpass(bbox, dest, url=a.overpass_url)
+        dest = os.path.join(a.out, f"{a.region}{'_pois' if a.pois_only else ''}.osm.pbf")
+        fetch.download_overpass(bbox, dest, url=a.overpass_url, query=fetch.overpass_query_pois if a.pois_only else None)
     else:
         pbf = (region or {}).get("pbf", a.region) if a.region != "bayern" else None
         url = fetch.geofabrik_url(pbf or "bayern")
         dest = os.path.join(a.out, os.path.basename(url))
         fetch.download(url, dest)
     print("Fertig:", dest)
+
+
+def cmd_merge(a: argparse.Namespace) -> None:
+    print("Fertig:", fetch.merge_osm(a.inputs, a.out))
 
 
 def cmd_dem(a: argparse.Namespace) -> None:
@@ -147,7 +151,7 @@ def cmd_route(a: argparse.Namespace) -> None:
     r = Router(g)
     gc = Geocoder(g.places)
     pts = [_resolve(x, gc) for x in [a.start] + list(a.via or []) + [a.end]]
-    opts = Options(avoid_roads=a.avoid, calm=a.calm, urban=a.urban, hills=a.hills, surface=a.surface)
+    opts = Options(avoid_roads=a.avoid, calm=a.calm, urban=a.urban, center=a.center, hills=a.hills, surface=a.surface)
     res = r.route(pts, a.profile, opts, compare=True)
     s = res.stats
     print(f"Strecke:      {s['distance_m'] / 1000:.2f} km")
@@ -156,6 +160,8 @@ def cmd_route(a: argparse.Namespace) -> None:
     print(f"Autostraße:   {s['road_m'] / 1000:.2f} km  (ruhig: {s['calm_m'] / 1000:.2f} km, eigener Weg: {s['own_m'] / 1000:.2f} km)")
     if g.has_urban:
         print(f"Bebauung:     {s['urban_m'] / 1000:.2f} km innerhalb von Siedlungsflächen")
+    if g.has_center:
+        print(f"Innenstadt:   {s['center_m'] / 1000:.2f} km im Innenstadt-Kern (Trubel-Wert gewichtet)")
     if "detour_m" in s:
         print(f"Umweg gegenüber Standard-Routing: {s['detour_m'] / 1000:+.2f} km "
               f"(Standard hätte {s['baseline']['road_m'] / 1000:.2f} km Autostraße)")
@@ -177,7 +183,7 @@ def cmd_explain(a: argparse.Namespace) -> None:
     gc = Geocoder(g.places)
     start, end = _resolve(a.start, gc), _resolve(a.end, gc)
     vias = [_resolve(x, gc) for x in (a.via or [])]
-    opts = Options(avoid_roads=a.avoid, calm=a.calm, urban=a.urban, hills=a.hills, surface=a.surface)
+    opts = Options(avoid_roads=a.avoid, calm=a.calm, urban=a.urban, center=a.center, hills=a.hills, surface=a.surface)
     out = explain.compare(r, [start, end], [start] + vias + [end], a.profile, opts)
     for label, key in (("Vom Router gewählte Route", "free"), ("Route durch deine Zwischenpunkte", "via")):
         res = out[key]
@@ -216,9 +222,16 @@ def main(argv: list[str] | None = None) -> None:
     d.add_argument("--out", default="data")
     d.add_argument("--overpass", action="store_true", help="statt PBF ein kleines Gebiet per Overpass-API laden")
     d.add_argument("--bbox", type=_bbox)
+    d.add_argument("--pois-only", action="store_true",
+                   help="mit --overpass: nur Geschäfte/Gastronomie/Fußgängerzonen laden (für 'Innenstadt meiden' in einen vorhandenen Download)")
     d.add_argument("--overpass-url", default=os.environ.get("FAHRRADNAVI_OVERPASS_URL", fetch.OVERPASS_URL),
                    help="Overpass-Endpunkt (Standard: overpass-api.de/api/interpreter)")
     d.set_defaults(func=cmd_download)
+
+    m = sub.add_parser("merge", help="mehrere OSM-Dateien zu einer zusammenführen")
+    m.add_argument("inputs", nargs="+")
+    m.add_argument("-o", "--out", required=True)
+    m.set_defaults(func=cmd_merge)
 
     h = sub.add_parser("dem", help="SRTM-Höhenkacheln laden")
     h.add_argument("--region", choices=sorted(fetch.REGIONS))
@@ -263,6 +276,7 @@ def main(argv: list[str] | None = None) -> None:
     r.add_argument("--avoid", type=float, default=1.0, help="Straßen-Meidung 0..2 (Standard 1)")
     r.add_argument("--calm", type=float, default=1.0, help="Wohnstraßen zusätzlich meiden 0..3 (Standard 1)")
     r.add_argument("--urban", type=float, default=0.0, help="Bebauung meiden 0..3 (Standard 0 = aus)")
+    r.add_argument("--center", type=float, default=0.0, help="Innenstadt meiden 0..3 (Standard 0 = aus)")
     r.add_argument("--hills", type=float, default=1.0)
     r.add_argument("--surface", type=float, default=1.0)
     r.add_argument("--gpx", help="GPX-Datei schreiben")
@@ -277,6 +291,7 @@ def main(argv: list[str] | None = None) -> None:
     x.add_argument("--avoid", type=float, default=1.0)
     x.add_argument("--calm", type=float, default=1.0)
     x.add_argument("--urban", type=float, default=0.0)
+    x.add_argument("--center", type=float, default=0.0)
     x.add_argument("--hills", type=float, default=1.0)
     x.add_argument("--surface", type=float, default=1.0)
     x.add_argument("--min-length", type=float, default=0.0, help="kürzere Abschnitte (m) ausblenden")

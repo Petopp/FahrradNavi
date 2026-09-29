@@ -61,6 +61,32 @@ def geofabrik_url(region: str) -> str:
 
 
 LANDUSE_URBAN = "residential|commercial|retail|industrial"
+# "Trubel": Geschäfte, Gastronomie, Kultur, Behörden – Grundlage für "Innenstadt meiden" (siehe importer.poi_weight)
+POI_AMENITY = ("restaurant|cafe|fast_food|bar|pub|biergarten|ice_cream|food_court|nightclub|cinema|theatre|bank|pharmacy|"
+               "post_office|townhall|marketplace|library|arts_centre")
+POI_TOURISM = "museum|gallery|attraction|hotel"
+
+
+def _poi_clauses(b: str) -> str:
+    return f"""  node["shop"]({b});
+  node["amenity"~"^({POI_AMENITY})$"]({b});
+  node["tourism"~"^({POI_TOURISM})$"]({b});
+  way["shop"]({b});
+  way["amenity"~"^({POI_AMENITY})$"]({b});
+  way["highway"="pedestrian"]({b});
+"""
+
+
+def overpass_query_pois(bbox: tuple[float, float, float, float]) -> str:
+    """Nur die POIs für "Innenstadt meiden" (klein; zum Nachladen in einen vorhandenen Datensatz)."""
+    s, w, n, e = bbox[1], bbox[0], bbox[3], bbox[2]
+    b = f"{s},{w},{n},{e}"
+    return f"""[out:xml][timeout:300];
+(
+{_poi_clauses(b)});
+(._;>>;);
+out body;
+"""
 
 
 def overpass_query(bbox: tuple[float, float, float, float]) -> str:
@@ -73,7 +99,7 @@ def overpass_query(bbox: tuple[float, float, float, float]) -> str:
   way["landuse"~"^({LANDUSE_URBAN})$"]({b});
   rel["landuse"~"^({LANDUSE_URBAN})$"]({b});
   node["highway"="traffic_signals"]({b});
-  node["place"]["name"]({b});
+{_poi_clauses(b)}  node["place"]["name"]({b});
   node["tourism"]["name"]({b});
   node["historic"]["name"]({b});
   node["amenity"~"^(monastery|place_of_worship|restaurant|cafe|biergarten|pub|townhall|bicycle_repair_station)$"]["name"]({b});
@@ -86,11 +112,11 @@ out body;
 """
 
 
-def _overpass_fetch(bbox, url: str, dest: str, retries: int = 4) -> None:
+def _overpass_fetch(bbox, url: str, dest: str, retries: int = 4, query=None) -> None:
     import time
     import urllib.error
 
-    data = urllib.parse.urlencode({"data": overpass_query(bbox)}).encode()
+    data = urllib.parse.urlencode({"data": (query or overpass_query)(bbox)}).encode()
     for attempt in range(retries):
         req = urllib.request.Request(url, data=data, headers={"User-Agent": USER_AGENT})
         try:
@@ -104,46 +130,22 @@ def _overpass_fetch(bbox, url: str, dest: str, retries: int = 4) -> None:
     raise RuntimeError(f"Overpass-Kachel {bbox} nach {retries} Versuchen nicht ladbar")
 
 
-def download_overpass(bbox: tuple[float, float, float, float], dest: str, url: str = OVERPASS_URL, tile: float = 0.1) -> str:
-    """Lädt ein Gebiet per Overpass-API in Kacheln (je ``tile`` Grad) und schreibt eine .osm.pbf.
-
-    Gedacht für Landkreis-große Gebiete; für ganz Oberbayern/Bayern besser den Geofabrik-Extrakt nutzen.
-    """
-    import math
-    import tempfile
-    import time
-
+def _collect(path: str, nodes: dict, ways: dict, rels: dict) -> None:
     import osmium
 
-    min_lon, min_lat, max_lon, max_lat = bbox
-    nx = max(1, math.ceil((max_lon - min_lon) / tile))
-    ny = max(1, math.ceil((max_lat - min_lat) / tile))
-    nodes: dict[int, tuple] = {}
-    ways: dict[int, tuple] = {}
-    rels: dict[int, tuple] = {}
-    os.makedirs(os.path.dirname(os.path.abspath(dest)), exist_ok=True)
-    with tempfile.TemporaryDirectory() as tmp:
-        for iy in range(ny):
-            for ix in range(nx):
-                tb = (
-                    min_lon + ix * (max_lon - min_lon) / nx, min_lat + iy * (max_lat - min_lat) / ny,
-                    min_lon + (ix + 1) * (max_lon - min_lon) / nx, min_lat + (iy + 1) * (max_lat - min_lat) / ny,
-                )
-                n = iy * nx + ix + 1
-                path = os.path.join(tmp, f"t{n}.osm")
-                print(f"\r  Kachel {n}/{nx * ny}", end="", flush=True)
-                _overpass_fetch(tb, url, path)
-                for o in osmium.FileProcessor(path):
-                    tags = {t.k: t.v for t in o.tags}
-                    if o.is_node():
-                        nodes[o.id] = (o.location.lon, o.location.lat, tags)
-                    elif o.is_way():
-                        ways[o.id] = ([n.ref for n in o.nodes], tags)
-                    elif o.is_relation():
-                        rels[o.id] = ([(m.type, m.ref, m.role) for m in o.members], tags)
-                os.remove(path)
-                time.sleep(1.0)  # höflich zum öffentlichen Server
-    print()
+    for o in osmium.FileProcessor(path):
+        tags = {t.k: t.v for t in o.tags}
+        if o.is_node():
+            nodes[o.id] = (o.location.lon, o.location.lat, tags)
+        elif o.is_way():
+            ways[o.id] = ([n.ref for n in o.nodes], tags)
+        elif o.is_relation():
+            rels[o.id] = ([(m.type, m.ref, m.role) for m in o.members], tags)
+
+
+def _write_merged(nodes: dict, ways: dict, rels: dict, dest: str) -> str:
+    import osmium
+
     log.info("Schreibe %d Nodes, %d Ways, %d Relationen nach %s", len(nodes), len(ways), len(rels), dest)
     with osmium.SimpleWriter(dest, overwrite=True) as w:
         for i in sorted(nodes):
@@ -156,6 +158,52 @@ def download_overpass(bbox: tuple[float, float, float, float], dest: str, url: s
             members, tags = rels[i]
             w.add_relation(osmium.osm.mutable.Relation(id=i, members=members, tags=tags))
     return dest
+
+
+def merge_osm(paths: list[str], dest: str) -> str:
+    """Führt mehrere OSM-Dateien zusammen (gleiche IDs werden nur einmal übernommen; spätere Dateien gewinnen)."""
+    nodes: dict = {}
+    ways: dict = {}
+    rels: dict = {}
+    for p in paths:
+        _collect(p, nodes, ways, rels)
+    return _write_merged(nodes, ways, rels, dest)
+
+
+def download_overpass(bbox: tuple[float, float, float, float], dest: str, url: str = OVERPASS_URL, tile: float = 0.1,
+                      query=None) -> str:
+    """Lädt ein Gebiet per Overpass-API in Kacheln (je ``tile`` Grad) und schreibt eine .osm.pbf.
+
+    Gedacht für Landkreis-große Gebiete; für ganz Oberbayern/Bayern besser den Geofabrik-Extrakt nutzen.
+    ``query``: Funktion bbox -> Overpass-QL (Standard: :func:`overpass_query`).
+    """
+    import math
+    import tempfile
+    import time
+
+    min_lon, min_lat, max_lon, max_lat = bbox
+    nx = max(1, math.ceil((max_lon - min_lon) / tile))
+    ny = max(1, math.ceil((max_lat - min_lat) / tile))
+    nodes: dict = {}
+    ways: dict = {}
+    rels: dict = {}
+    os.makedirs(os.path.dirname(os.path.abspath(dest)), exist_ok=True)
+    with tempfile.TemporaryDirectory() as tmp:
+        for iy in range(ny):
+            for ix in range(nx):
+                tb = (
+                    min_lon + ix * (max_lon - min_lon) / nx, min_lat + iy * (max_lat - min_lat) / ny,
+                    min_lon + (ix + 1) * (max_lon - min_lon) / nx, min_lat + (iy + 1) * (max_lat - min_lat) / ny,
+                )
+                n = iy * nx + ix + 1
+                path = os.path.join(tmp, f"t{n}.osm")
+                print(f"\r  Kachel {n}/{nx * ny}", end="", flush=True)
+                _overpass_fetch(tb, url, path, query=query)
+                _collect(path, nodes, ways, rels)
+                os.remove(path)
+                time.sleep(1.0)  # höflich zum öffentlichen Server
+    print()
+    return _write_merged(nodes, ways, rels, dest)
 
 
 def download_srtm(bbox: tuple[float, float, float, float], out_dir: str) -> list[str]:

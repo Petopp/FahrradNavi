@@ -90,6 +90,10 @@
     <div class="top"><span>Wohnstraßen meiden</span><span id="calmTxt"></span></div>
     <input type="range" id="calm" min="0" max="3" step="0.5" value="1">
   </div>
+  <div class="slider" id="centerBox">
+    <div class="top"><span>Innenstadt meiden</span><span id="centerTxt"></span></div>
+    <input type="range" id="center" min="0" max="3" step="0.5" value="1">
+  </div>
   <div class="slider" id="urbanBox">
     <div class="top"><span>Bebauung meiden</span><span id="urbanTxt"></span></div>
     <input type="range" id="urban" min="0" max="3" step="0.5" value="0">
@@ -120,6 +124,7 @@
       <div>Höhenmeter<b id="sAsc"></b></div>
       <div>Unbefestigt<b id="sUnp"></b></div>
       <div id="sUrbBox">Bebauung<b id="sUrb"></b></div>
+      <div id="sCenBox">Innenstadt<b id="sCen"></b></div>
       <div>Ampeln<b id="sSig"></b></div>
     </div>
     <div class="note" id="detour" style="margin-top:10px"></div>
@@ -174,6 +179,9 @@ async function init() {
   routeLayer.addTo(map); baseLayer.addTo(map); altLayer.addTo(map);
   for (const p of cfg.profiles) $("profile").add(new Option(p.label, p.id));
   $("profile").value = cfg.default_profile;
+  if (!cfg.has_center) {
+    disableSlider("centerBox", "Keine Geschäfts-/Gastronomie-Daten im Graphen – „Innenstadt meiden“ ist nicht verfügbar (Graph neu bauen, siehe README).");
+  }
   if (!cfg.has_urban) {
     disableSlider("urbanBox", "Keine Siedlungsflächen im Graphen – „Bebauung meiden“ ist nicht verfügbar (Graph neu bauen, siehe README).");
   }
@@ -265,14 +273,15 @@ $("reset").onclick = () => { points = []; renderPoints(); routeLayer.clearLayers
 
 // ---- Einstellungen -------------------------------------------------------
 function updateLabels() {
-  const a = +$("avoid").value, h = +$("hills").value, s = +$("surface").value, c = +$("calm").value, u = +$("urban").value;
+  const a = +$("avoid").value, h = +$("hills").value, s = +$("surface").value, c = +$("calm").value, u = +$("urban").value, ci = +$("center").value;
+  $("centerTxt").textContent = ci === 0 ? "egal" : ci < 1 ? "leicht" : ci === 1 ? "normal" : ci < 2.5 ? "stark" : "maximal";
   $("urbanTxt").textContent = u === 0 ? "egal" : u < 1 ? "leicht" : u === 1 ? "normal" : u < 2.5 ? "stark" : "maximal";
   $("calmTxt").textContent = c === 0 ? "egal" : c < 1 ? "leicht" : c === 1 ? "normal" : c < 2.5 ? "stark" : "maximal";
   $("avoidTxt").textContent = a === 0 ? "egal" : a < 1 ? "leicht" : a === 1 ? "konsequent" : "extrem";
   $("hillsTxt").textContent = h === 0 ? "egal" : h < 1 ? "leicht" : h === 1 ? "normal" : h < 2.5 ? "stark" : "sehr stark";
   $("surfaceTxt").textContent = s === 0 ? "egal" : s < 1 ? "leicht" : s === 1 ? "normal" : s < 2.5 ? "stark" : "sehr stark";
 }
-for (const id of ["avoid", "calm", "urban", "hills", "surface", "profile"]) {
+for (const id of ["avoid", "calm", "center", "urban", "hills", "surface", "profile"]) {
   $(id).addEventListener("input", () => { updateLabels(); scheduleRoute(); });
 }
 
@@ -282,7 +291,7 @@ function requestBody(compare) {
   return {
     points: filled().map((p) => ({ lat: p.lat, lon: p.lon })),
     profile: $("profile").value,
-    avoid_roads: +$("avoid").value, calm: +$("calm").value, urban: cfg.has_urban ? +$("urban").value : 0, hills: +$("hills").value, surface: +$("surface").value,
+    avoid_roads: +$("avoid").value, calm: +$("calm").value, urban: cfg.has_urban ? +$("urban").value : 0, center: cfg.has_center ? +$("center").value : 0, hills: +$("hills").value, surface: +$("surface").value,
     compare, alternatives: 3,
   };
 }
@@ -332,7 +341,7 @@ function renderAlts() {
     const s = r.stats;
     const b = document.createElement("button");
     b.className = "alt" + (i === selected ? " sel" : "");
-    b.innerHTML = `<b>${r.label}</b><span>${fmtKm(s.distance_m)} · Autostraße ${fmtKm(s.road_m)} · Wohnstraße ${fmtKm(s.calm_m)}${cfg.has_urban && +$("urban").value > 0 ? " · Bebauung " + fmtKm(s.urban_m) : ""} · ${fmtTime(s.duration_s)}</span>`;
+    b.innerHTML = `<b>${r.label}</b><span>${fmtKm(s.distance_m)} · Autostraße ${fmtKm(s.road_m)} · Wohnstraße ${fmtKm(s.calm_m)}${cfg.has_urban && +$("urban").value > 0 ? " · Bebauung " + fmtKm(s.urban_m) : ""}${cfg.has_center && +$("center").value > 0 ? " · Innenstadt " + fmtKm(s.center_m) : ""} · ${fmtTime(s.duration_s)}</span>`;
     b.onclick = () => selectRoute(i, false);
     box.appendChild(b);
   });
@@ -363,6 +372,8 @@ function show(d, fit = true) {
   $("sUnp").textContent = fmtKm(s.unpaved_m);
   $("sUrbBox").style.display = cfg.has_urban ? "" : "none";
   $("sUrb").textContent = fmtKm(s.urban_m || 0);
+  $("sCenBox").style.display = cfg.has_center ? "" : "none";
+  $("sCen").textContent = fmtKm(s.center_m || 0);
   $("sSig").textContent = s.signals;
   $("lOwn").textContent = fmtKm(s.own_m); $("lCalm").textContent = fmtKm(s.calm_m); $("lRoad").textContent = fmtKm(s.road_m);
   $("sBar").innerHTML = ["own", "calm", "road"].map((k) => `<div style="width:${(s[k + "_m"] / tot * 100).toFixed(1)}%;background:${COLORS[k]}"></div>`).join("");

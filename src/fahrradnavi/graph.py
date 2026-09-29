@@ -23,11 +23,11 @@ import numpy as np
 from . import tags as T
 from .dem import Dem
 from .importer import E7, RawData
-from .urban import UrbanRaster
+from .urban import CenterField, UrbanRaster
 
 log = logging.getLogger(__name__)
 
-FORMAT_VERSION = 2
+FORMAT_VERSION = 3
 NO_ELE = -32768  # int16-Marker, Höhe in Dezimetern
 
 ARRAYS = (
@@ -35,7 +35,7 @@ ARRAYS = (
     "node_lat", "node_lon", "node_sig",
     # Kanten
     "e_u", "e_v", "e_len", "e_vs", "e_ve", "e_hwc", "e_fwd", "e_bwd", "e_infra", "e_surf", "e_smooth",
-    "e_maxspeed", "e_flags", "e_name", "e_sig", "e_urban", "e_up", "e_down", "e_s8u", "e_s8d", "e_s12u", "e_s12d",
+    "e_maxspeed", "e_flags", "e_name", "e_sig", "e_urban", "e_center", "e_up", "e_down", "e_s8u", "e_s8d", "e_s12u", "e_s12d",
     # Vertices (Geometrie)
     "v_lat", "v_lon", "v_ele",
     # Snap-Punkte
@@ -79,6 +79,10 @@ class Graph:
     @property
     def has_urban(self) -> bool:
         return bool(self.meta.get("has_urban"))
+
+    @property
+    def has_center(self) -> bool:
+        return bool(self.meta.get("has_center"))
 
     # -- Topologie ------------------------------------------------------
     def topology(self) -> Topology:
@@ -266,29 +270,35 @@ def build_graph(raw: RawData, dem: Dem | None = None, bbox: tuple | None = None)
         e_s12u = acc(up & (grade >= 0.12), dd)
         e_s12d = acc(dn & (grade <= -0.12), dd)
 
-    # --- Bebauung: Anteil der Kantenlänge innerhalb von Siedlungsflächen (0..255) --------
-    e_urban = np.zeros(E, dtype=np.uint8)
-    has_urban = bool(raw.urban_rings)
-    if has_urban:
-        ub = bbox or (
-            float(vlon.min()) / E7, float(vlat.min()) / E7, float(vlon.max()) / E7, float(vlat.max()) / E7,
-        )
-        raster = UrbanRaster(raw.urban_rings, ub)
-        # Jedes Segment in Schritten von höchstens einer Rasterzelle abtasten (genau auch bei langen Segmenten)
+    # --- Ortsbezogene Werte je Kante (0..255): Anteil in Bebauung, Innenstadt-Wert -------------
+    def edge_mean(sample, step_m: float) -> np.ndarray:
+        """Längengewichteter Mittelwert eines Rasterwerts (0..1) je Kante; Segmente werden fein abgetastet."""
         same_e = inc_edge[1:] == inc_edge[:-1]
         seg_len = np.where(same_e, inc_dist[1:] - inc_dist[:-1], 0.0)
         idx = np.flatnonzero(same_e & (seg_len > 0))
-        n = np.maximum(1, np.ceil(seg_len[idx] / raster.cell)).astype(np.int64)
+        n = np.maximum(1, np.ceil(seg_len[idx] / step_m)).astype(np.int64)
         rep = np.repeat(idx, n)
         k = np.arange(int(n.sum()), dtype=np.int64) - np.repeat(np.cumsum(n) - n, n)
         t = (k + 0.5) / np.repeat(n, n)
         va, vb = inc_vertex[rep], inc_vertex[rep + 1]
         lat = vlat[va] + t * (vlat[vb].astype(np.float64) - vlat[va])
         lon = vlon[va] + t * (vlon[vb].astype(np.float64) - vlon[va])
-        inside = raster.contains(lat, lon)
-        w = seg_len[rep] / np.repeat(n, n)
-        tot = np.bincount(inc_edge[rep], weights=np.where(inside, w, 0.0), minlength=E)
-        e_urban = np.clip(np.round(tot / np.maximum(e_len.astype(np.float64), 0.01) * 255.0), 0, 255).astype(np.uint8)
+        vals = np.asarray(sample(lat, lon), dtype=np.float64)
+        tot = np.bincount(inc_edge[rep], weights=vals * (seg_len[rep] / np.repeat(n, n)), minlength=E)
+        return np.clip(np.round(tot / np.maximum(e_len.astype(np.float64), 0.01) * 255.0), 0, 255).astype(np.uint8)
+
+    area_bbox = bbox or (float(vlon.min()) / E7, float(vlat.min()) / E7, float(vlon.max()) / E7, float(vlat.max()) / E7)
+    e_urban = np.zeros(E, dtype=np.uint8)
+    has_urban = bool(raw.urban_rings)
+    if has_urban:
+        raster = UrbanRaster(raw.urban_rings, area_bbox)
+        e_urban = edge_mean(lambda la, lo: raster.contains(la, lo), raster.cell)
+    e_center = np.zeros(E, dtype=np.uint8)
+    has_center = len(raw.pois) > 0
+    if has_center:
+        retail = [r for r in raw.urban_rings if len(r) > 2 and r[2] in ("retail", "commercial")]
+        field_ = CenterField(raw.pois, area_bbox, retail)
+        e_center = edge_mean(field_.sample, field_.cell)
 
     v_ele = np.full(N, NO_ELE, dtype=np.int16)
     fin = np.isfinite(ele)
@@ -315,7 +325,7 @@ def build_graph(raw: RawData, dem: Dem | None = None, bbox: tuple | None = None)
         e_u=e_u, e_v=e_v, e_len=e_len, e_vs=vs.astype(np.int32), e_ve=ve.astype(np.int32),
         e_hwc=e_hwc, e_fwd=raw.way_fwd[wv], e_bwd=raw.way_bwd[wv], e_infra=raw.way_infra[wv],
         e_surf=raw.way_surface[wv], e_smooth=raw.way_smooth[wv], e_maxspeed=raw.way_maxspeed[wv],
-        e_flags=e_flags, e_name=raw.way_name[wv], e_sig=e_sig, e_urban=e_urban,
+        e_flags=e_flags, e_name=raw.way_name[wv], e_sig=e_sig, e_urban=e_urban, e_center=e_center,
         e_up=e_up, e_down=e_down, e_s8u=e_s8u, e_s8d=e_s8d, e_s12u=e_s12u, e_s12d=e_s12d,
         v_lat=vlat, v_lon=vlon, v_ele=v_ele,
         snap_v=snap_v, snap_e=snap_e, snap_frac=snap_frac,
@@ -326,8 +336,9 @@ def build_graph(raw: RawData, dem: Dem | None = None, bbox: tuple | None = None)
         "bbox": list(bbox),
         "has_elevation": have_ele,
         "has_urban": has_urban,
+        "has_center": has_center,
         "n_nodes": int(len(node_lat)),
         "n_edges": int(E),
     }
-    log.info("Graph: %d Knoten, %d Kanten, %d Vertices, Höhen: %s, Bebauung: %s", len(node_lat), E, N, have_ele, has_urban)
+    log.info("Graph: %d Knoten, %d Kanten, %d Vertices, Höhen: %s, Bebauung: %s, Innenstadt: %s", len(node_lat), E, N, have_ele, has_urban, has_center)
     return Graph(arrays, raw.names, places, meta)

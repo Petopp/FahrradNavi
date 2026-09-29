@@ -27,7 +27,48 @@ _AMENITY_OK = {
 _NATURAL_OK = {"peak": 4, "beach": 3, "spring": 2, "cave_entrance": 2}
 
 # Diese Schlüssel werden beim Lesen vorgefiltert (OR-Verknüpfung, schnell in C++).
-INTERESTING_KEYS = ("highway", "place", "tourism", "historic", "amenity", "railway", "natural", "leisure")
+INTERESTING_KEYS = ("highway", "place", "tourism", "historic", "amenity", "railway", "natural", "leisure", "shop")
+
+# "Trubel"-Gewicht je Objekt für "Innenstadt meiden": Geschäfte, Gastronomie, Kultur, Behörden
+_POI_AMENITY = {
+    "restaurant": 1.0, "cafe": 1.0, "fast_food": 1.0, "bar": 1.0, "pub": 1.0, "biergarten": 1.0, "ice_cream": 1.0,
+    "food_court": 1.0, "nightclub": 1.0, "cinema": 1.0, "theatre": 1.0, "marketplace": 1.0,
+    "bank": 0.7, "pharmacy": 0.7, "post_office": 0.7, "townhall": 0.7, "library": 0.7, "arts_centre": 0.7,
+}
+_POI_TOURISM = {"museum": 1.0, "gallery": 1.0, "attraction": 1.0, "hotel": 0.5}
+
+
+def poi_weight(tags: dict[str, str]) -> float:
+    """Wie sehr ein Objekt auf Innenstadt-Trubel hindeutet (0 = gar nicht)."""
+    shop = tags.get("shop")
+    if shop:
+        return 0.3 if shop == "vacant" else 1.0
+    a = tags.get("amenity")
+    if a in _POI_AMENITY:
+        return _POI_AMENITY[a]
+    t = tags.get("tourism")
+    if t in _POI_TOURISM:
+        return _POI_TOURISM[t]
+    return 0.0
+
+
+def _along(pts: list[tuple[float, float]], step_m: float = 25.0) -> list[tuple[float, float]]:
+    """Punkte (lat, lon) entlang einer Linie im Abstand von ``step_m`` (für Fußgängerzonen), auch zwischen den Stützpunkten."""
+    import math
+
+    out = [pts[0]]
+    carry = 0.0  # Restlänge seit dem letzten Punkt
+    for (la0, lo0), (la1, lo1) in zip(pts[:-1], pts[1:]):
+        d = math.hypot((la1 - la0) * 110_574.0, (lo1 - lo0) * 111_320.0 * math.cos(math.radians(la0)))
+        if d <= 0:
+            continue
+        pos = step_m - carry
+        while pos <= d:
+            t = pos / d
+            out.append((la0 + t * (la1 - la0), lo0 + t * (lo1 - lo0)))
+            pos += step_m
+        carry = d - (pos - step_m)
+    return out
 
 
 @dataclass
@@ -48,8 +89,10 @@ class RawData:
     names: list[str]
     signal_ids: np.ndarray  # int64
     places: list[tuple[str, str, int, float, float]] = field(default_factory=list)
-    # Siedlungsflächen: [(äußerer Ring (N,2) lon/lat, [Löcher])]
+    # Siedlungsflächen: [(äußerer Ring (N,2) lon/lat, [Löcher], landuse-Art)]
     urban_rings: list = field(default_factory=list)
+    # POIs für "Innenstadt meiden": Array (N, 3) mit lon, lat, Gewicht
+    pois: np.ndarray = field(default_factory=lambda: np.zeros((0, 3)))
 
 
 URBAN_LANDUSE = ("residential", "commercial", "retail", "industrial")
@@ -82,7 +125,7 @@ def read_urban_areas(path: str, bbox: tuple[float, float, float, float] | None =
                 h = np.array([(n.lon, n.lat) for n in inner if n.location.valid()], dtype=np.float64)
                 if len(h) >= 4:
                     holes.append(h)
-            out.append((ring, holes))
+            out.append((ring, holes, o.tags.get("landuse", "residential")))
     log.info("  %d Siedlungsflächen", len(out))
     return out
 
@@ -156,6 +199,7 @@ def read_osm(path: str, bbox: tuple[float, float, float, float] | None = None, u
     names: list[str] = [""]
     name_idx: dict[str, int] = {"": 0}
     signals = array("q")
+    pois: list[tuple[float, float, float]] = []
     places: list[tuple[str, str, int, float, float]] = []
     seen_streets: set[tuple[str, int, int]] = set()
 
@@ -171,9 +215,21 @@ def read_osm(path: str, bbox: tuple[float, float, float, float] | None = None, u
             pi = place_info(tg)
             if pi and o.location.valid():
                 places.append((tg["name"], pi[0], pi[1], o.location.lat, o.location.lon))
+            pw = poi_weight(tg)
+            if pw and o.location.valid():
+                pois.append((o.location.lon, o.location.lat, pw))
             continue
 
         tg = _tags(o)
+        pw = poi_weight(tg)
+        if pw and tg.get("highway") is None:  # Laden/Lokal als Gebäudefläche: Schwerpunkt
+            pts = [(n.lon, n.lat) for n in o.nodes if n.location.valid()]
+            if pts:
+                pois.append((sum(p[0] for p in pts) / len(pts), sum(p[1] for p in pts) / len(pts), pw))
+        if tg.get("highway") == "pedestrian":  # Fußgängerzone = Innenstadt-Kern, auch wenn nicht befahrbar
+            line = [(n.lat, n.lon) for n in o.nodes if n.location.valid()]
+            if len(line) >= 2:
+                pois.extend((lo, la, 1.0) for la, lo in _along(line))
         info = T.classify_way(tg)
         if info is None:
             pi = place_info(tg)
@@ -231,7 +287,7 @@ def read_osm(path: str, bbox: tuple[float, float, float, float] | None = None, u
                 seen_streets.add(key)
                 places.append((nm, "street", 0, r_lat[mid] / E7, r_lon[mid] / E7))
 
-    log.info("  %d Wege, %d Vertices, %d Ampeln, %d Orte", n_ways, len(refs), len(signals), len(places))
+    log.info("  %d Wege, %d Vertices, %d Ampeln, %d Orte, %d Trubel-Punkte", n_ways, len(refs), len(signals), len(places), len(pois))
     urban_rings: list = []
     if urban:
         log.info("Pass 3: Siedlungsflächen")
@@ -258,4 +314,5 @@ def read_osm(path: str, bbox: tuple[float, float, float, float] | None = None, u
         signal_ids=np.unique(np_(signals, np.int64)),
         places=places,
         urban_rings=urban_rings,
+        pois=np.array(pois, dtype=np.float64).reshape(-1, 3),
     )
