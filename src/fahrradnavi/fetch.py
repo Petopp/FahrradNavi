@@ -81,14 +81,75 @@ out body;
 """
 
 
-def download_overpass(bbox: tuple[float, float, float, float], dest: str, url: str = OVERPASS_URL) -> str:
-    """Lädt ein (kleines) Gebiet direkt per Overpass-API als .osm. Für große Gebiete besser Geofabrik nutzen."""
+def _overpass_fetch(bbox, url: str, dest: str, retries: int = 4) -> None:
+    import time
+    import urllib.error
+
     data = urllib.parse.urlencode({"data": overpass_query(bbox)}).encode()
-    req = urllib.request.Request(url, data=data, headers={"User-Agent": USER_AGENT})
+    for attempt in range(retries):
+        req = urllib.request.Request(url, data=data, headers={"User-Agent": USER_AGENT})
+        try:
+            with urllib.request.urlopen(req, timeout=600) as r, open(dest, "wb") as f:
+                shutil.copyfileobj(r, f)
+            return
+        except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError) as exc:
+            wait = 5 * 2**attempt
+            log.warning("Overpass-Kachel %s fehlgeschlagen (%s), neuer Versuch in %d s", bbox, exc, wait)
+            time.sleep(wait)
+    raise RuntimeError(f"Overpass-Kachel {bbox} nach {retries} Versuchen nicht ladbar")
+
+
+def download_overpass(bbox: tuple[float, float, float, float], dest: str, url: str = OVERPASS_URL, tile: float = 0.1) -> str:
+    """Lädt ein Gebiet per Overpass-API in Kacheln (je ``tile`` Grad) und schreibt eine .osm.pbf.
+
+    Gedacht für Landkreis-große Gebiete; für ganz Oberbayern/Bayern besser den Geofabrik-Extrakt nutzen.
+    """
+    import math
+    import tempfile
+    import time
+
+    import osmium
+
+    min_lon, min_lat, max_lon, max_lat = bbox
+    nx = max(1, math.ceil((max_lon - min_lon) / tile))
+    ny = max(1, math.ceil((max_lat - min_lat) / tile))
+    nodes: dict[int, tuple] = {}
+    ways: dict[int, tuple] = {}
+    rels: dict[int, tuple] = {}
     os.makedirs(os.path.dirname(os.path.abspath(dest)), exist_ok=True)
-    log.info("Overpass-Abfrage für %s (kann mehrere Minuten dauern)", bbox)
-    with urllib.request.urlopen(req, timeout=1200) as r, open(dest, "wb") as f:
-        shutil.copyfileobj(r, f)
+    with tempfile.TemporaryDirectory() as tmp:
+        for iy in range(ny):
+            for ix in range(nx):
+                tb = (
+                    min_lon + ix * (max_lon - min_lon) / nx, min_lat + iy * (max_lat - min_lat) / ny,
+                    min_lon + (ix + 1) * (max_lon - min_lon) / nx, min_lat + (iy + 1) * (max_lat - min_lat) / ny,
+                )
+                n = iy * nx + ix + 1
+                path = os.path.join(tmp, f"t{n}.osm")
+                print(f"\r  Kachel {n}/{nx * ny}", end="", flush=True)
+                _overpass_fetch(tb, url, path)
+                for o in osmium.FileProcessor(path):
+                    tags = {t.k: t.v for t in o.tags}
+                    if o.is_node():
+                        nodes[o.id] = (o.location.lon, o.location.lat, tags)
+                    elif o.is_way():
+                        ways[o.id] = ([n.ref for n in o.nodes], tags)
+                    elif o.is_relation():
+                        rels[o.id] = ([(m.type, m.ref, m.role) for m in o.members], tags)
+                os.remove(path)
+                time.sleep(1.0)  # höflich zum öffentlichen Server
+    print()
+    log.info("Schreibe %d Nodes, %d Ways, %d Relationen nach %s", len(nodes), len(ways), len(rels), dest)
+    with osmium.SimpleWriter(dest, overwrite=True) as w:
+        for i in sorted(nodes):
+            lon, lat, tags = nodes[i]
+            w.add_node(osmium.osm.mutable.Node(id=i, location=(lon, lat), tags=tags))
+        for i in sorted(ways):
+            refs, tags = ways[i]
+            w.add_way(osmium.osm.mutable.Way(id=i, nodes=refs, tags=tags))
+        for i in sorted(rels):
+            members, tags = rels[i]
+            w.add_relation(osmium.osm.mutable.Relation(id=i, members=members, tags=tags))
     return dest
 
 

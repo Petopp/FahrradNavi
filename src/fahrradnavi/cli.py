@@ -43,8 +43,8 @@ def cmd_download(a: argparse.Namespace) -> None:
         bbox = a.bbox or (region or {}).get("bbox")
         if not bbox:
             sys.exit("Für --overpass wird --bbox oder eine Region mit fester bbox (z. B. starnberg) benötigt.")
-        dest = os.path.join(a.out, f"{a.region}.osm")
-        fetch.download_overpass(bbox, dest)
+        dest = os.path.join(a.out, f"{a.region}.osm.pbf")
+        fetch.download_overpass(bbox, dest, url=a.overpass_url)
     else:
         pbf = (region or {}).get("pbf", a.region) if a.region != "bayern" else None
         url = fetch.geofabrik_url(pbf or "bayern")
@@ -131,6 +131,8 @@ def main(argv: list[str] | None = None) -> None:
     d.add_argument("--out", default="data")
     d.add_argument("--overpass", action="store_true", help="statt PBF ein kleines Gebiet per Overpass-API laden")
     d.add_argument("--bbox", type=_bbox)
+    d.add_argument("--overpass-url", default=os.environ.get("FAHRRADNAVI_OVERPASS_URL", fetch.OVERPASS_URL),
+                   help="Overpass-Endpunkt (Standard: overpass-api.de/api/interpreter)")
     d.set_defaults(func=cmd_download)
 
     h = sub.add_parser("dem", help="SRTM-Höhenkacheln laden")
