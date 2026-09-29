@@ -4,6 +4,7 @@ import numpy as np
 import pytest
 from fastapi.testclient import TestClient
 
+from fahrradnavi.auth import AuthConfig
 from fahrradnavi.api import create_app, exposure_m
 from fahrradnavi.graph import Graph, build_graph
 from fahrradnavi.importer import read_osm
@@ -130,7 +131,7 @@ def test_old_format_is_rejected(town, tmp_path):
 
 def test_api_urban_parameter_and_config(town):
     _, g = town
-    c = TestClient(create_app(graph=g))
+    c = TestClient(create_app(graph=g, auth=AuthConfig.disabled()))
     assert c.get("/api/config").json()["has_urban"] is True
     pts = [{"lat": to_ll(0, 0)[0], "lon": to_ll(0, 0)[1]}, {"lat": to_ll(3000, 0)[0], "lon": to_ll(3000, 0)[1]}]
     a = c.post("/api/route", json={"points": pts, "urban": 0}).json()["stats"]

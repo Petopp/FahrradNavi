@@ -4,7 +4,7 @@ Fahrrad-Routenplaner auf Basis von [OpenStreetMap](https://www.openstreetmap.org
 auch wenn dafür ein Umweg von mehreren Kilometern nötig ist. Reines Python, selbst hostbar, mit Weboberfläche
 und GPX-Export (z. B. für Komoot, Garmin, Wahoo, OsmAnd).
 
-> **Stand:** Prototyp. Kernlogik, API und Weboberfläche sind getestet (59 Tests mit synthetischem Testnetz, Browser-Test)
+> **Stand:** Prototyp. Kernlogik, API und Weboberfläche sind getestet (84 Tests mit synthetischem Testnetz, Browser-Test)
 > und mit echten OSM-Daten des Landkreises Starnberg geprüft. Beispiel *Starnberg → Kloster Andechs* (Trekkingrad):
 > 16,4 km mit 0,3 km Autostraße – die kürzeste Route (14,6 km) hätte 6,1 km auf Autostraßen. Ganz Bayern ist noch nicht
 > gebaut/gemessen, siehe [Skalierung](#skalierung-auf-ganz-bayern).
@@ -126,17 +126,43 @@ curl -X POST localhost:8000/api/gpx   -H 'Content-Type: application/json' -d '{.
 curl 'localhost:8000/api/geocode?q=andechs'
 ```
 
-## Selbst betreiben
+## Betrieb auf einem Server (Docker)
+
+Der Server ist **standardmäßig mit Passwort gesichert** und lässt sich in drei Schritten in Betrieb nehmen:
 
 ```bash
-docker compose up -d     # erwartet ./data/graph.npz (vorher mit den Befehlen oben bauen)
+cp .env.example .env                                  # Passwort eintragen (FAHRRADNAVI_PASSWORD=...)
+docker compose --profile setup run --rm builder       # einmalig: OSM-Daten + Höhen laden, Graph bauen (Gebiet: FAHRRADNAVI_REGION)
+docker compose up -d                                  # läuft auf 127.0.0.1:8000 (nur lokal erreichbar)
+docker compose --profile https up -d                  # zusätzlich HTTPS über Caddy (FAHRRADNAVI_DOMAIN setzen, Ports 80/443 offen)
 ```
 
-(Das Dockerfile wurde bisher nicht ausgeführt – bitte beim ersten Einsatz prüfen.) Ohne Docker:
-`fahrradnavi serve --host 0.0.0.0 --port 8000` hinter einem Reverse-Proxy (Caddy/nginx) mit HTTPS.
+Der Container läuft als unprivilegierter Benutzer mit schreibgeschütztem Dateisystem, ohne Linux-Capabilities und mit
+Speicherlimit; der Graph liegt in einem Docker-Volume (`data`). Gebiete: `starnberg` (klein, per Geofabrik-Ausschnitt),
+`oberbayern`, `bayern`. Für Starnberg ohne Geofabrik: im `builder` `command: ["fahrradnavi","-v","setup","starnberg","--overpass"]`.
+Kartenupdate: Builder mit `--force` erneut ausführen (`... run --rm builder fahrradnavi setup starnberg --force`), dann `docker compose restart fahrradnavi`.
+Ist Docker Hub für dich gesperrt/limitiert: `docker compose build --build-arg PYTHON_IMAGE=mirror.gcr.io/library/python:3.12-slim`.
 
-Umgebungsvariablen: `FAHRRADNAVI_GRAPH` (Pfad zur `graph.npz`), `FAHRRADNAVI_TILE_URL`,
-`FAHRRADNAVI_TILE_ATTRIBUTION`.
+### Zugriffsschutz
+
+| Schutz | Wirkung | Einstellung (`.env`) |
+|---|---|---|
+| **Passwort (Standard)** | Alles außer `/login` und dem Health-Check verlangt Anmeldung (Login-Seite, Session-Cookie: HttpOnly, SameSite=Strict, `Secure` hinter HTTPS). Ohne konfiguriertes Passwort erzeugt der Server beim Start ein **zufälliges** und schreibt es ins Log (`docker compose logs fahrradnavi`) – er läuft nie offen. | `FAHRRADNAVI_PASSWORD` (min. 8 Zeichen) oder `FAHRRADNAVI_PASSWORD_HASH` (`fahrradnavi hash-password`, PBKDF2-SHA256) |
+| **Sperre gegen Raten** | Nach N Fehlversuchen wird die IP gesperrt (HTTP 429), jede weitere Sperre dauert doppelt so lang (max. 24 h). | `FAHRRADNAVI_MAX_LOGIN_FAILURES=5`, `FAHRRADNAVI_LOCKOUT_SECONDS=900` |
+| **IP-Freigabeliste** | *„Nicht von überall einloggen“*: Nur Clients aus den angegebenen Netzen erreichen die Seite überhaupt (sonst 403), z. B. Heimnetz + VPN. | `FAHRRADNAVI_ALLOWED_NETS=192.168.0.0/16,10.8.0.0/24` |
+| **Sitzungsdauer** | Wie lange eine Anmeldung gültig bleibt; ein Passwortwechsel meldet alle ab. | `FAHRRADNAVI_SESSION_HOURS=168` |
+| **API-Token** (optional) | Für Skripte: `Authorization: Bearer <Token>` – nur für `/api/*`. | `FAHRRADNAVI_API_TOKEN` (min. 20 Zeichen) |
+| Härtung | CSP (nur eigene Ressourcen + Kachelserver), `X-Frame-Options: DENY`, `no-store`, HSTS hinter HTTPS, Swagger-UI aus. | – |
+
+**Hinter einem Reverse-Proxy** (Caddy im Compose, nginx, Traefik …): Die echte Client-IP für Sperre und Freigabeliste wird aus
+`X-Forwarded-For` nur gelesen, wenn die direkte Gegenstelle in `FAHRRADNAVI_TRUSTED_PROXIES` steht (Compose: das interne Docker-Netz
+`172.28.0.0/24`). Der Proxy muss den Header selbst setzen bzw. überschreiben (Caddy tut das) – sonst könnte ein Client seine IP
+fälschen. **Öffentlich immer über HTTPS betreiben**, sonst läuft das Passwort im Klartext über die Leitung.
+Abschalten des Schutzes nur ausdrücklich: `FAHRRADNAVI_AUTH=off` bzw. `fahrradnavi serve --no-auth` (lokal/vertrauenswürdiges Netz).
+
+Weitere Umgebungsvariablen: `FAHRRADNAVI_GRAPH`, `FAHRRADNAVI_TILE_URL`, `FAHRRADNAVI_TILE_ATTRIBUTION`, `FAHRRADNAVI_DOCS=1` (Swagger-UI).
+
+**Ohne Docker:** `pip install .`, `FAHRRADNAVI_PASSWORD=... fahrradnavi serve --host 0.0.0.0 --port 8000` hinter einem HTTPS-Reverse-Proxy.
 
 **Kartenkacheln:** Der Standard `tile.openstreetmap.org` ist nur für geringe Last gedacht
 ([Nutzungsrichtlinie](https://operations.osmfoundation.org/policies/tiles/)). Für eine öffentliche Seite bitte einen

@@ -1,0 +1,7 @@
+# HTTPS-Reverse-Proxy für FahrradNavi (Zertifikat automatisch via Let's Encrypt).
+# Voraussetzung: FAHRRADNAVI_DOMAIN zeigt per DNS auf den Server, Ports 80 und 443 sind offen.
+{$FAHRRADNAVI_DOMAIN} {
+	encode zstd gzip
+	# Caddy überschreibt X-Forwarded-For/-Proto selbst, ein Client kann sie nicht fälschen
+	reverse_proxy fahrradnavi:8000
+}

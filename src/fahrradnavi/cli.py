@@ -54,7 +54,8 @@ def cmd_download(a: argparse.Namespace) -> None:
 
 
 def cmd_dem(a: argparse.Namespace) -> None:
-    bbox = a.bbox or (fetch.REGIONS.get(a.region or "") or {}).get("bbox")
+    reg = fetch.REGIONS.get(a.region or "") or {}
+    bbox = a.bbox or reg.get("bbox") or reg.get("dem_bbox")
     if not bbox:
         sys.exit("--bbox oder --region angeben.")
     files = fetch.download_srtm(bbox, a.out)
@@ -83,7 +84,56 @@ def cmd_serve(a: argparse.Namespace) -> None:
 
     from .api import create_app
 
-    uvicorn.run(create_app(graph_path=a.graph), host=a.host, port=a.port)
+    if a.no_auth:
+        os.environ["FAHRRADNAVI_AUTH"] = "off"
+    # Proxy-Header wertet FahrradNavi selbst aus (nur von FAHRRADNAVI_TRUSTED_PROXIES), nicht uvicorn
+    uvicorn.run(create_app(graph_path=a.graph), host=a.host, port=a.port, proxy_headers=False, server_header=False)
+
+
+def cmd_hash_password(a: argparse.Namespace) -> None:
+    import getpass
+
+    from . import auth
+
+    if a.stdin:
+        pw = sys.stdin.readline().rstrip("\n")
+    else:
+        pw = getpass.getpass("Neues Passwort: ")
+        if pw != getpass.getpass("Wiederholen: "):
+            sys.exit("Die Passwörter stimmen nicht überein.")
+    if len(pw) < auth.MIN_PASSWORD_LEN:
+        sys.exit(f"Passwort zu kurz (mindestens {auth.MIN_PASSWORD_LEN} Zeichen).")
+    print(auth.hash_password(pw))
+    print("\nIn .env eintragen:  FAHRRADNAVI_PASSWORD_HASH=<obige Zeile>  (in .env in einfache Anführungszeichen setzen: FAHRRADNAVI_PASSWORD_HASH='...')",
+          file=sys.stderr)
+
+
+def cmd_setup(a: argparse.Namespace) -> None:
+    """Alles für ein Gebiet in einem Schritt: OSM laden, Höhen laden, Graph bauen (überspringt Vorhandenes)."""
+    reg = fetch.REGIONS[a.region]
+    os.makedirs(a.data, exist_ok=True)
+    out = os.path.join(a.data, "graph.npz")
+    if os.path.exists(out) and not a.force:
+        print(f"{out} existiert bereits (mit --force neu bauen).")
+        return
+    if a.overpass:
+        bbox = reg.get("bbox")
+        if not bbox:
+            sys.exit("--overpass geht nur für kleine Gebiete (z. B. starnberg); für große bitte Geofabrik verwenden.")
+        osm = os.path.join(a.data, f"{a.region}.osm.pbf")
+        if not os.path.exists(osm) or a.force:
+            fetch.download_overpass(bbox, osm, url=a.overpass_url)
+    else:
+        url = fetch.geofabrik_url(reg.get("pbf") or "bayern")
+        osm = os.path.join(a.data, os.path.basename(url))
+        if not os.path.exists(osm) or a.force:
+            fetch.download(url, osm)
+    bbox = reg.get("bbox")
+    dem_dir = os.path.join(a.data, "dem")
+    if not a.no_dem:
+        fetch.download_srtm(bbox or reg["dem_bbox"], dem_dir)
+    ns = argparse.Namespace(osm=osm, out=out, dem=dem_dir if not a.no_dem else None, region=a.region, bbox=None)
+    cmd_build(ns)
 
 
 def cmd_route(a: argparse.Namespace) -> None:
@@ -188,7 +238,21 @@ def main(argv: list[str] | None = None) -> None:
     s.add_argument("--graph", default=os.environ.get("FAHRRADNAVI_GRAPH", "data/graph.npz"))
     s.add_argument("--host", default="127.0.0.1")
     s.add_argument("--port", type=int, default=8000)
+    s.add_argument("--no-auth", action="store_true", help="Zugriffsschutz abschalten (nur lokal/vertrauenswürdiges Netz!)")
     s.set_defaults(func=cmd_serve)
+
+    hp = sub.add_parser("hash-password", help="Passwort-Hash für FAHRRADNAVI_PASSWORD_HASH erzeugen")
+    hp.add_argument("--stdin", action="store_true", help="Passwort aus stdin lesen (für Skripte)")
+    hp.set_defaults(func=cmd_hash_password)
+
+    su = sub.add_parser("setup", help="Gebiet einrichten: OSM + Höhen laden und Graph bauen (für Docker)")
+    su.add_argument("region", choices=sorted(fetch.REGIONS))
+    su.add_argument("--data", default=os.environ.get("FAHRRADNAVI_DATA_DIR", "data"))
+    su.add_argument("--overpass", action="store_true", help="kleines Gebiet per Overpass statt Geofabrik laden")
+    su.add_argument("--overpass-url", default=os.environ.get("FAHRRADNAVI_OVERPASS_URL", fetch.OVERPASS_URL))
+    su.add_argument("--no-dem", action="store_true", help="ohne Höhendaten bauen")
+    su.add_argument("--force", action="store_true", help="vorhandene Dateien neu laden/bauen")
+    su.set_defaults(func=cmd_setup)
 
     r = sub.add_parser("route", help="Route auf der Kommandozeile berechnen")
     r.add_argument("--graph", default="data/graph.npz")

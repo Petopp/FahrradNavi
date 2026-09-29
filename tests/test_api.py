@@ -3,6 +3,7 @@ import xml.etree.ElementTree as ET
 import pytest
 from fastapi.testclient import TestClient
 
+from fahrradnavi.auth import AuthConfig
 from fahrradnavi.api import create_app
 from fahrradnavi.geocoder import Geocoder, normalize
 from fahrradnavi.graph import Graph
@@ -13,7 +14,7 @@ from fixture import POINTS
 
 @pytest.fixture(scope="module")
 def client(graph):
-    return TestClient(create_app(graph=graph))
+    return TestClient(create_app(graph=graph, auth=AuthConfig.disabled()))
 
 
 def body(a, b, **kw):
@@ -107,3 +108,30 @@ def test_save_load_roundtrip(graph, tmp_path):
     a = Router(graph).route([POINTS["S1"], POINTS["T1"]], "trekking", Options())
     b = Router(g2).route([POINTS["S1"], POINTS["T1"]], "trekking", Options())
     assert a.stats["distance_m"] == b.stats["distance_m"]
+
+
+def test_installed_package_contains_web_assets():
+    """Regression: jede Datei unter web/ (inkl. lokal eingebundenem Leaflet) muss von package-data erfasst sein,
+    sonst fehlt sie im installierten Paket/Docker-Image (in der Entwicklung fällt das nicht auf)."""
+    import fnmatch
+    import pathlib
+
+    try:
+        import tomllib
+    except ImportError:  # Python 3.10
+        pytest.skip("tomllib erst ab Python 3.11")
+    root = pathlib.Path(__file__).resolve().parent.parent
+    patterns = tomllib.loads((root / "pyproject.toml").read_text())["tool"]["setuptools"]["package-data"]["fahrradnavi"]
+    pkg = root / "src" / "fahrradnavi"
+    files = [f.relative_to(pkg).as_posix() for f in (pkg / "web").rglob("*") if f.is_file()]
+    assert "web/index.html" in files and "web/vendor/leaflet.js" in files and "web/vendor/images/marker-icon.png" in files
+
+    def covered(rel: str) -> bool:
+        parts = rel.split("/")
+        return any(
+            len(pat.split("/")) == len(parts) and all(fnmatch.fnmatchcase(a, b) for a, b in zip(parts, pat.split("/")))
+            for pat in patterns
+        )
+
+    missing = [f for f in files if not covered(f)]
+    assert not missing, f"nicht in package-data: {missing}"

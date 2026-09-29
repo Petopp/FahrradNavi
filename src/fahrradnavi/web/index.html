@@ -130,6 +130,7 @@
     <div class="hint" style="margin-top:6px">GPX lässt sich in Komoot (Planer → „GPX importieren“), Garmin, Wahoo, OsmAnd u. a. laden.</div>
   </div>
 
+  <button class="btn" id="logout" style="display:none;align-self:flex-start">Abmelden</button>
   <footer>
     Karte &amp; Routing-Daten © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap-Mitwirkende</a>.
     Routen sind Vorschläge – Beschilderung und Verkehrsregeln vor Ort haben Vorrang.
@@ -151,8 +152,21 @@ let routes = [], selected = 0, altLayer = L.layerGroup();
 const fmtKm = (m) => (m / 1000).toLocaleString("de-DE", { maximumFractionDigits: 1, minimumFractionDigits: 1 }) + " km";
 const fmtTime = (s) => { const m = Math.round(s / 60); return m >= 60 ? Math.floor(m / 60) + " h " + String(m % 60).padStart(2, "0") + " min" : m + " min"; };
 
+// Regler ausblenden (Element bleibt erhalten, damit der Zugriff auf .value nicht fehlschlägt) und Hinweis zeigen
+function disableSlider(boxId, text) {
+  const box = $(boxId);
+  [...box.children].forEach((c) => (c.style.display = "none"));
+  const note = document.createElement("div");
+  note.className = "note warn";
+  note.textContent = text;
+  box.appendChild(note);
+}
+
 async function init() {
-  cfg = await (await fetch("/api/config")).json();
+  const cr = await fetch("/api/config");
+  if (cr.status === 401) { location.href = "/login"; return; }
+  cfg = await cr.json();
+  if (cfg.auth) $("logout").style.display = "inline-block";
   const [minLon, minLat, maxLon, maxLat] = cfg.bbox;
   map = L.map("map", { zoomControl: true }).fitBounds([[minLat, minLon], [maxLat, maxLon]]);
   L.tileLayer(cfg.tiles.url, { attribution: cfg.tiles.attribution, maxZoom: 19 }).addTo(map);
@@ -161,10 +175,10 @@ async function init() {
   for (const p of cfg.profiles) $("profile").add(new Option(p.label, p.id));
   $("profile").value = cfg.default_profile;
   if (!cfg.has_urban) {
-    $("urbanBox").innerHTML = '<div class="note warn">Keine Siedlungsflächen im Graphen – „Bebauung meiden“ ist nicht verfügbar (Graph neu bauen, siehe README).</div>';
+    disableSlider("urbanBox", "Keine Siedlungsflächen im Graphen – „Bebauung meiden“ ist nicht verfügbar (Graph neu bauen, siehe README).");
   }
   if (!cfg.has_elevation) {
-    $("hillsBox").innerHTML = '<div class="note warn">Keine Höhendaten im Graphen – Steigungen werden nicht berücksichtigt (siehe README: <code>fahrradnavi dem</code>).</div>';
+    disableSlider("hillsBox", "Keine Höhendaten im Graphen – Steigungen werden nicht berücksichtigt (siehe README: fahrradnavi dem).");
   }
   map.on("click", (e) => addPoint(e.latlng.lat, e.latlng.lng));
   renderPoints(); updateLabels();
@@ -281,6 +295,7 @@ async function route() {
     const body = requestBody(true);
     const r = await fetch("/api/route", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
     if (my !== reqId) return;
+    if (r.status === 401) { location.href = "/login"; return; }
     if (!r.ok) {
       const e = await r.json().catch(() => ({}));
       throw new Error(e.detail || "Fehler " + r.status);
@@ -402,6 +417,7 @@ function restoreFromHash(b64) {
     renderPoints(); route();
   } catch (e) { /* ignorieren */ }
 }
+$("logout").onclick = async () => { await fetch("/logout", { method: "POST" }); location.href = "/login"; };
 init();
 </script>
 </body>

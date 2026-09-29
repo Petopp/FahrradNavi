@@ -1,6 +1,7 @@
 import pytest
 from fastapi.testclient import TestClient
 
+from fahrradnavi.auth import AuthConfig
 from fahrradnavi.api import create_app, exposure_m, label_routes
 from fahrradnavi.graph import build_graph
 from fahrradnavi.importer import read_osm
@@ -63,7 +64,7 @@ def test_labels_and_ranking_prefer_fewer_roads_over_short(net):
 
 
 def test_api_alternatives_and_pick(net):
-    c = TestClient(create_app(graph=net))
+    c = TestClient(create_app(graph=net, auth=AuthConfig.disabled()))
     body = {"points": [{"lat": to_ll(0, 0)[0], "lon": to_ll(0, 0)[1]}, {"lat": to_ll(2000, 0)[0], "lon": to_ll(2000, 0)[1]}],
             "alternatives": 2, "compare": True}
     d = c.post("/api/route", json=body).json()
@@ -78,7 +79,7 @@ def test_api_alternatives_and_pick(net):
 
 
 def test_api_calm_parameter_validated(net):
-    c = TestClient(create_app(graph=net))
+    c = TestClient(create_app(graph=net, auth=AuthConfig.disabled()))
     pts = [{"lat": to_ll(0, 0)[0], "lon": to_ll(0, 0)[1]}, {"lat": to_ll(2000, 0)[0], "lon": to_ll(2000, 0)[1]}]
     assert c.post("/api/route", json={"points": pts, "calm": 5}).status_code == 422
     assert c.post("/api/route", json={"points": pts, "calm": 2}).status_code == 200

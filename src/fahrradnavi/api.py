@@ -11,7 +11,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import __version__
+from . import __version__, auth as authmod
 from .geocoder import Geocoder
 from .gpx import route_to_gpx
 from .graph import Graph
@@ -100,8 +100,18 @@ def _route_payload(res: RouteResult) -> dict:
     return out
 
 
-def create_app(graph: Graph | None = None, graph_path: str | None = None) -> FastAPI:
-    app = FastAPI(title="FahrradNavi", version=__version__, docs_url="/api/docs", openapi_url="/api/openapi.json")
+def create_app(
+    graph: Graph | None = None,
+    graph_path: str | None = None,
+    auth: authmod.AuthConfig | None = None,
+) -> FastAPI:
+    """``auth=None`` liest den Zugriffsschutz aus den Umgebungsvariablen (Standard: Passwort erforderlich)."""
+    auth = auth if auth is not None else authmod.AuthConfig.from_env()
+    docs = os.environ.get("FAHRRADNAVI_DOCS", "").lower() in ("1", "true", "yes", "on")  # Swagger-UI lädt Skripte von einem CDN
+    app = FastAPI(
+        title="FahrradNavi", version=__version__,
+        docs_url="/api/docs" if docs else None, redoc_url=None, openapi_url="/api/openapi.json" if docs else None,
+    )
 
     if graph is None:
         graph_path = graph_path or os.environ.get("FAHRRADNAVI_GRAPH", "data/graph.npz")
@@ -113,8 +123,9 @@ def create_app(graph: Graph | None = None, graph_path: str | None = None) -> Fas
         graph = Graph.load(graph_path)
     router = Router(graph)
     geocoder = Geocoder(graph.places)
-    tiles = os.environ.get("FAHRRADNAVI_TILE_URL", DEFAULT_TILES)
-    attribution = os.environ.get("FAHRRADNAVI_TILE_ATTRIBUTION", DEFAULT_ATTRIBUTION)
+    tiles = os.environ.get("FAHRRADNAVI_TILE_URL") or DEFAULT_TILES
+    attribution = os.environ.get("FAHRRADNAVI_TILE_ATTRIBUTION") or DEFAULT_ATTRIBUTION
+    authmod.install(app, auth, tiles)
 
     @app.get("/api/config")
     def config() -> dict:
@@ -124,6 +135,7 @@ def create_app(graph: Graph | None = None, graph_path: str | None = None) -> Fas
             "bbox": [min_lon, min_lat, max_lon, max_lat],
             "has_elevation": graph.has_elevation,
             "has_urban": graph.has_urban,
+            "auth": auth.enabled,
             "profiles": [{"id": p.name, "label": p.label} for p in PROFILES.values()],
             "default_profile": DEFAULT_PROFILE,
             "tiles": {"url": tiles, "attribution": attribution},

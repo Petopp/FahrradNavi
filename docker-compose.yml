@@ -1,11 +1,87 @@
+# FahrradNavi – Betrieb auf einem Server
+#
+#   1. cp .env.example .env   und Passwort eintragen (sonst wird bei jedem Start ein zufälliges erzeugt!)
+#   2. docker compose --profile setup run --rm builder     # einmalig: Karte + Höhen laden, Graph bauen
+#   3. docker compose up -d                                # nur auf 127.0.0.1:8000 erreichbar
+#      docker compose --profile https up -d                # zusätzlich HTTPS mit Caddy (FAHRRADNAVI_DOMAIN setzen)
+#
+# Der Dienst ist standardmäßig mit Passwort gesichert. Er hört nur auf localhost; öffentlich wird er erst durch
+# den Caddy-Container (HTTPS) oder einen eigenen Reverse-Proxy.
+
+name: fahrradnavi
+
+x-env: &env
+  FAHRRADNAVI_GRAPH: /data/graph.npz
+  FAHRRADNAVI_PASSWORD: ${FAHRRADNAVI_PASSWORD:-}
+  FAHRRADNAVI_PASSWORD_HASH: ${FAHRRADNAVI_PASSWORD_HASH:-}
+  FAHRRADNAVI_API_TOKEN: ${FAHRRADNAVI_API_TOKEN:-}
+  FAHRRADNAVI_ALLOWED_NETS: ${FAHRRADNAVI_ALLOWED_NETS:-}
+  FAHRRADNAVI_SESSION_HOURS: ${FAHRRADNAVI_SESSION_HOURS:-168}
+  FAHRRADNAVI_MAX_LOGIN_FAILURES: ${FAHRRADNAVI_MAX_LOGIN_FAILURES:-5}
+  FAHRRADNAVI_LOCKOUT_SECONDS: ${FAHRRADNAVI_LOCKOUT_SECONDS:-900}
+  # leer = Standard (OpenStreetMap-Kachelserver); Platzhalter {z}/{x}/{y} nicht in Compose-Defaults schreiben
+  FAHRRADNAVI_TILE_URL: ${FAHRRADNAVI_TILE_URL:-}
+  FAHRRADNAVI_TILE_ATTRIBUTION: ${FAHRRADNAVI_TILE_ATTRIBUTION:-}
+  # Nur diese Adressen dürfen X-Forwarded-For/-Proto setzen (das Docker-Netz unten, inkl. Caddy und Host-Gateway)
+  FAHRRADNAVI_TRUSTED_PROXIES: ${FAHRRADNAVI_TRUSTED_PROXIES:-172.28.0.0/24}
+
 services:
   fahrradnavi:
     build: .
-    ports:
-      - "8000:8000"
-    volumes:
-      - ./data:/data:ro
-    environment:
-      # Für öffentlichen Betrieb eigenen Tile-Anbieter eintragen (siehe README, Abschnitt Kartenkacheln)
-      FAHRRADNAVI_TILE_URL: "https://tile.openstreetmap.org/{z}/{x}/{y}.png"
+    image: fahrradnavi:latest
     restart: unless-stopped
+    environment: *env
+    ports:
+      - "127.0.0.1:${FAHRRADNAVI_PORT:-8000}:8000"
+    volumes:
+      - data:/data:ro
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    mem_limit: ${FAHRRADNAVI_MEM_LIMIT:-2g}
+    networks: [web]
+    logging:
+      driver: json-file
+      options: {max-size: "10m", max-file: "3"}
+
+  # Einmalig (und bei Kartenupdates): lädt OSM-Daten + Höhen und baut den Routing-Graphen in das Volume.
+  builder:
+    profiles: [setup]
+    build: .
+    image: fahrradnavi:latest
+    environment:
+      FAHRRADNAVI_OVERPASS_URL: ${FAHRRADNAVI_OVERPASS_URL:-https://overpass-api.de/api/interpreter}
+    command: ["fahrradnavi", "-v", "setup", "${FAHRRADNAVI_REGION:-starnberg}"]
+    volumes:
+      - data:/data
+    networks: [web]
+
+  # Optional: HTTPS mit automatischem Let's-Encrypt-Zertifikat
+  caddy:
+    profiles: [https]
+    image: caddy:2-alpine
+    restart: unless-stopped
+    depends_on: [fahrradnavi]
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      FAHRRADNAVI_DOMAIN: ${FAHRRADNAVI_DOMAIN:-localhost}  # für HTTPS im echten Betrieb unbedingt setzen
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    networks: [web]
+
+networks:
+  web:
+    ipam:
+      config:
+        - subnet: 172.28.0.0/24
+
+volumes:
+  data:
+  caddy_data:
+  caddy_config:

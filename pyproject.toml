@@ -27,7 +27,7 @@ fahrradnavi = "fahrradnavi.cli:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-fahrradnavi = ["web/*"]
+fahrradnavi = ["web/*", "web/vendor/*", "web/vendor/images/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

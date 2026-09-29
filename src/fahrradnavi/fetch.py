@@ -26,8 +26,8 @@ SRTM_URL = "https://elevation-tiles-prod.s3.amazonaws.com/skadi/{ns}{lat:02d}/{n
 # Vordefinierte Gebiete (min_lon, min_lat, max_lon, max_lat) – bewusst großzügig für Umwege.
 REGIONS: dict[str, dict] = {
     "starnberg": {"bbox": (11.00, 47.70, 11.65, 48.20), "pbf": "oberbayern", "label": "Landkreis Starnberg + Umland"},
-    "oberbayern": {"bbox": None, "pbf": "oberbayern", "label": "Regierungsbezirk Oberbayern"},
-    "bayern": {"bbox": None, "pbf": None, "label": "Freistaat Bayern"},
+    "oberbayern": {"bbox": None, "dem_bbox": (10.6, 47.1, 13.1, 48.95), "pbf": "oberbayern", "label": "Regierungsbezirk Oberbayern"},
+    "bayern": {"bbox": None, "dem_bbox": (8.9, 47.2, 13.9, 50.6), "pbf": None, "label": "Freistaat Bayern"},
 }
 
 
