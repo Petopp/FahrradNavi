@@ -4,9 +4,10 @@ Fahrrad-Routenplaner auf Basis von [OpenStreetMap](https://www.openstreetmap.org
 auch wenn dafür ein Umweg von mehreren Kilometern nötig ist. Reines Python, selbst hostbar, mit Weboberfläche
 und GPX-Export (z. B. für Komoot, Garmin, Wahoo, OsmAnd).
 
-> **Stand:** Prototyp. Kernlogik, API und Weboberfläche sind getestet (39 Tests, synthetisches Testnetz + Browser-Test).
-> Mit echten Bayern-/Starnberg-Daten wurde noch **nicht** gerechnet, weil die Entwicklungsumgebung keinen Zugriff auf
-> Geofabrik/Overpass hatte. Der erste Lauf mit echten Daten steht also noch aus – siehe [Schnellstart](#schnellstart-landkreis-starnberg).
+> **Stand:** Prototyp. Kernlogik, API und Weboberfläche sind getestet (39 Tests mit synthetischem Testnetz, Browser-Test)
+> und mit echten OSM-Daten des Landkreises Starnberg geprüft. Beispiel *Starnberg → Kloster Andechs* (Trekkingrad):
+> 16,4 km mit 0,3 km Autostraße – die kürzeste Route (14,6 km) hätte 6,1 km auf Autostraßen. Ganz Bayern ist noch nicht
+> gebaut/gemessen, siehe [Skalierung](#skalierung-auf-ganz-bayern).
 
 ## Wie das "Meiden" funktioniert
 
@@ -64,8 +65,10 @@ fahrradnavi dem --region starnberg --out data/dem                # SRTM-Höhenka
 fahrradnavi build data/oberbayern-latest.osm.pbf --region starnberg --dem data/dem --out data/graph.npz
 ```
 
-Kleine Gebiete gehen auch ohne 250-MB-Download per Overpass-API:
-`fahrradnavi download starnberg --overpass --out data` → `data/starnberg.osm`. Für größere Gebiete bitte Geofabrik nutzen.
+Kleine Gebiete gehen auch ohne 250-MB-Download per Overpass-API (in 0,1°-Kacheln mit Wiederholung, ergibt `data/starnberg.osm.pbf`):
+`./scripts/setup_starnberg.sh overpass` bzw. `fahrradnavi download starnberg --overpass --out data [--overpass-url URL]`.
+Der Standard-Endpunkt `overpass-api.de` lässt sich per `--overpass-url` oder `FAHRRADNAVI_OVERPASS_URL` ersetzen (Starnberg: ~35 Kacheln,
+~15 Minuten, 16 MB). Für größere Gebiete bitte Geofabrik nutzen.
 
 Eigene Gebiete: `--bbox min_lon,min_lat,max_lon,max_lat` statt `--region`.
 Ganz Bayern: `fahrradnavi download bayern`, dann `fahrradnavi build data/bayern-latest.osm.pbf` (siehe [Skalierung](#skalierung-auf-ganz-bayern)).

@@ -90,7 +90,7 @@ PROFILES: dict[str, Profile] = {
         steep12_cost=1.5,
         steep_down_cost=0.1,
         speed_kmh=18.0,
-        climb_seconds_per_m=4.0,
+        climb_seconds_per_m=3.0,
     ),
     "road": Profile(
         name="road",
@@ -103,7 +103,7 @@ PROFILES: dict[str, Profile] = {
         steep12_cost=1.0,
         steep_down_cost=0.25,
         speed_kmh=25.0,
-        climb_seconds_per_m=3.0,
+        climb_seconds_per_m=2.5,
     ),
     "gravel": Profile(
         name="gravel",
@@ -116,7 +116,7 @@ PROFILES: dict[str, Profile] = {
         steep12_cost=1.2,
         steep_down_cost=0.15,
         speed_kmh=19.0,
-        climb_seconds_per_m=4.0,
+        climb_seconds_per_m=3.0,
     ),
     "ebike": Profile(
         name="ebike",

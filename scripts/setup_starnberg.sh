@@ -4,9 +4,18 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-python -m fahrradnavi -v download oberbayern --out data          # ~250 MB
-python -m fahrradnavi -v dem --region starnberg --out data/dem    # 2 SRTM-Kacheln, ~25 MB
-python -m fahrradnavi -v build data/oberbayern-latest.osm.pbf --region starnberg --dem data/dem --out data/graph.npz
+# Variante 1 (Standard): Geofabrik-Extrakt Oberbayern (~250 MB), wird auf Starnberg zugeschnitten.
+# Variante 2 (./scripts/setup_starnberg.sh overpass): nur das Gebiet per Overpass-API in Kacheln laden (~15 Min, ~16 MB).
+if [ "${1:-}" = "overpass" ]; then
+  python -m fahrradnavi -v download starnberg --overpass --out data \
+    ${OVERPASS_URL:+--overpass-url "$OVERPASS_URL"}
+  OSM=data/starnberg.osm.pbf
+else
+  python -m fahrradnavi -v download oberbayern --out data
+  OSM=data/oberbayern-latest.osm.pbf
+fi
+python -m fahrradnavi -v dem --region starnberg --out data/dem    # 2 SRTM-Kacheln, ~21 MB
+python -m fahrradnavi -v build "$OSM" --region starnberg --dem data/dem --out data/graph.npz
 
 echo
 echo "Fertig. Testen mit:"
