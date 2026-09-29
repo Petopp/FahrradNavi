@@ -19,7 +19,6 @@
   html, body { height: 100%; margin: 0; }
   body { font: 15px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; background: var(--bg); color: var(--ink); display: flex; }
   #side { width: 380px; max-width: 100%; height: 100%; overflow-y: auto; background: var(--panel); border-right: 1px solid var(--line); padding: 16px; display: flex; flex-direction: column; gap: 14px; z-index: 2; }
-  #map { flex: 1; height: 100%; }
   h1 { font-size: 20px; margin: 0; letter-spacing: .2px; }
   h1 small { font-weight: 400; color: var(--muted); font-size: 13px; margin-left: 6px; }
   label { display: block; font-size: 13px; color: var(--muted); margin-bottom: 4px; }
@@ -63,49 +62,120 @@
     #side { width: 100%; height: 55%; border-right: 0; border-top: 1px solid var(--line); }
     #map { height: 45%; flex: none; }
   }
+
+  .tabs { display: flex; gap: 6px; }
+  .tabs button { flex: 1; padding: 8px 10px; border: 1px solid var(--line); background: var(--bg); color: var(--ink); border-radius: 8px; font: inherit; cursor: pointer; }
+  .tabs button.on { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); font-weight: 600; }
+  details.card { border: 1px solid var(--line); border-radius: 10px; padding: 8px 12px; }
+  details.card > summary { cursor: pointer; font-weight: 600; font-size: 14px; }
+  details.card[open] > summary { margin-bottom: 10px; }
+  .tools { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+  .tools button { text-align: left; }
+  .tools button.on { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+  .ov-list { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; }
+  .ov-item { border: 1px solid var(--line); border-radius: 8px; padding: 6px 8px; font-size: 13px; }
+  .ov-item .head { display: flex; align-items: center; gap: 6px; }
+  .ov-item .head .nm { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .ov-item input[type=range] { margin-top: 4px; }
+  .ov-item button { border: 0; background: none; color: var(--muted); cursor: pointer; font-size: 16px; padding: 0 4px; }
+  .sw { display: inline-block; width: 12px; height: 12px; border-radius: 3px; flex: none; }
+  #modebar { position: absolute; z-index: 1000; left: 50%; top: 10px; transform: translateX(-50%); display: none; gap: 8px; align-items: center; background: var(--panel); color: var(--ink); border: 1px solid var(--line); border-radius: 10px; padding: 8px 12px; box-shadow: 0 4px 16px rgba(0,0,0,.25); max-width: 92%; font-size: 14px; }
+  #modebar button { border: 1px solid var(--line); background: var(--bg); color: var(--ink); border-radius: 8px; padding: 4px 10px; cursor: pointer; font: inherit; }
+  #mapwrap { position: relative; flex: 1; height: 100%; }
+  #mapwrap #map { position: absolute; inset: 0; }
+  #toast { position: absolute; z-index: 1000; bottom: 24px; left: 50%; transform: translateX(-50%); background: #222; color: #fff; padding: 8px 14px; border-radius: 8px; display: none; max-width: 90%; font-size: 14px; }
+  .ghost { width: 16px; height: 16px; border-radius: 50%; background: #fff; border: 3px solid #3b6fd4; box-shadow: 0 1px 4px rgba(0,0,0,.5); cursor: grab; }
+  .popbtn { display: block; width: 100%; margin: 4px 0; padding: 6px 8px; border: 1px solid #ccc; background: #f6f7f4; color: #1d2320; border-radius: 6px; cursor: pointer; font: inherit; text-align: left; }
+  .check { display: flex; align-items: center; gap: 6px; font-size: 14px; }
+  .check input { width: auto; }
+  #tripBox { display: none; flex-direction: column; gap: 10px; }
+  @media (max-width: 760px) { #mapwrap { height: 45%; flex: none; } }
 </style>
 </head>
 <body>
 <div id="side">
   <h1>FahrradNavi <small>Autostraßen meiden</small></h1>
 
+  <div class="tabs" role="tablist">
+    <button id="tabRoute" class="on" role="tab">Route</button>
+    <button id="tabTrip" role="tab">Rundreise</button>
+  </div>
+
   <div id="points"></div>
-  <div class="row" style="flex-wrap:wrap">
-    <button class="btn" id="addVia" title="Zwischenziel hinzufügen">+ Zwischenziel</button>
-    <button class="btn" id="swap">⇅ Tauschen</button>
-    <button class="btn" id="reset">Zurücksetzen</button>
+  <div id="routeTools">
+    <div class="row" style="flex-wrap:wrap">
+      <button class="btn" id="addVia" title="Zwischenziel hinzufügen">+ Zwischenziel</button>
+      <button class="btn" id="swap">⇅ Tauschen</button>
+      <button class="btn" id="reset">Zurücksetzen</button>
+    </div>
+    <label class="check" style="margin-top:8px"><input type="checkbox" id="loop"> Zurück zum Start (Rundkurs über die Zwischenziele)</label>
   </div>
-  <div class="hint" id="clickhint">Auf die Karte klicken, um Start und Ziel zu setzen – oder oben nach Orten suchen.</div>
+  <div class="hint" id="clickhint">Auf die Karte klicken, um Start und Ziel zu setzen – oder oben nach Orten suchen. Route an der Linie ziehen, um Zwischenziele einzufügen.</div>
 
-  <div>
-    <label for="profile">Fahrrad</label>
-    <select id="profile"></select>
+  <div id="tripBox">
+    <div class="slider">
+      <div class="top"><span>Länge der Rundreise</span><span id="tripKmTxt"></span></div>
+      <input type="range" id="tripKm" min="5" max="150" step="1" value="40">
+    </div>
+    <div>
+      <label for="tripHeading">Richtung</label>
+      <select id="tripHeading">
+        <option value="">beliebig (mehrere Richtungen vergleichen)</option>
+        <option value="0">Nord</option><option value="45">Nordost</option><option value="90">Ost</option><option value="135">Südost</option>
+        <option value="180">Süd</option><option value="225">Südwest</option><option value="270">West</option><option value="315">Nordwest</option>
+      </select>
+    </div>
+    <button class="btn primary" id="tripGo">Rundreise berechnen</button>
+    <div class="hint">Start = Punkt A (Karte anklicken oder suchen). Die Schleifen werden mit deinen Reglern, gemiedenen Bereichen und Lieblingswegen berechnet.</div>
   </div>
 
-  <div class="slider">
-    <div class="top"><span>Straßen meiden</span><span id="avoidTxt"></span></div>
-    <input type="range" id="avoid" min="0" max="2" step="0.25" value="1">
-  </div>
-  <div class="slider">
-    <div class="top"><span>Wohnstraßen meiden</span><span id="calmTxt"></span></div>
-    <input type="range" id="calm" min="0" max="3" step="0.5" value="1">
-  </div>
-  <div class="slider" id="centerBox">
-    <div class="top"><span>Innenstadt meiden</span><span id="centerTxt"></span></div>
-    <input type="range" id="center" min="0" max="3" step="0.5" value="1">
-  </div>
-  <div class="slider" id="urbanBox">
-    <div class="top"><span>Bebauung meiden</span><span id="urbanTxt"></span></div>
-    <input type="range" id="urban" min="0" max="3" step="0.5" value="0">
-  </div>
-  <div class="slider" id="hillsBox">
-    <div class="top"><span>Steigungen meiden</span><span id="hillsTxt"></span></div>
-    <input type="range" id="hills" min="0" max="3" step="0.5" value="1">
-  </div>
-  <div class="slider">
-    <div class="top"><span>Schlechten Belag meiden</span><span id="surfaceTxt"></span></div>
-    <input type="range" id="surface" min="0" max="3" step="0.5" value="1">
-  </div>
+  <details class="card" id="toolsCard" open>
+    <summary>Bereiche &amp; Lieblingswege</summary>
+    <div class="tools">
+      <button class="btn" id="toolCircle" title="Kreis auf der Karte aufziehen">◯ Kreis meiden</button>
+      <button class="btn" id="toolPolygon" title="Fläche auf der Karte zeichnen">⬠ Fläche meiden</button>
+      <button class="btn" id="toolGpx" title="GPX-Datei laden: diese Strecke wird bevorzugt">★ Lieblingsweg (GPX)</button>
+      <button class="btn" id="toolSaveFav" title="Die angezeigte Route als Lieblingsweg merken" disabled>★ Route merken</button>
+    </div>
+    <input type="file" id="gpxFile" accept=".gpx,application/gpx+xml,text/xml" style="display:none">
+    <div class="hint" style="margin-top:8px">Gemiedene Bereiche machen Wege dort deutlich teurer (weich: nur wenn es keinen zumutbaren Umweg gibt). Lieblingswege werden bevorzugt. Beides bleibt in diesem Browser gespeichert.</div>
+    <div class="ov-list" id="areaList"></div>
+    <div class="ov-list" id="favList"></div>
+  </details>
+
+  <details class="card" id="settingsCard" open>
+    <summary>Einstellungen</summary>
+    <div style="display:flex;flex-direction:column;gap:12px">
+      <div>
+        <label for="profile">Fahrrad</label>
+        <select id="profile"></select>
+      </div>
+      <div class="slider">
+        <div class="top"><span>Straßen meiden</span><span id="avoidTxt"></span></div>
+        <input type="range" id="avoid" min="0" max="2" step="0.25" value="1">
+      </div>
+      <div class="slider">
+        <div class="top"><span>Wohnstraßen meiden</span><span id="calmTxt"></span></div>
+        <input type="range" id="calm" min="0" max="3" step="0.5" value="1">
+      </div>
+      <div class="slider" id="centerBox">
+        <div class="top"><span>Innenstadt meiden</span><span id="centerTxt"></span></div>
+        <input type="range" id="center" min="0" max="3" step="0.5" value="1">
+      </div>
+      <div class="slider" id="urbanBox">
+        <div class="top"><span>Bebauung meiden</span><span id="urbanTxt"></span></div>
+        <input type="range" id="urban" min="0" max="3" step="0.5" value="0">
+      </div>
+      <div class="slider" id="hillsBox">
+        <div class="top"><span>Steigungen meiden</span><span id="hillsTxt"></span></div>
+        <input type="range" id="hills" min="0" max="3" step="0.5" value="1">
+      </div>
+      <div class="slider">
+        <div class="top"><span>Schlechten Belag meiden</span><span id="surfaceTxt"></span></div>
+        <input type="range" id="surface" min="0" max="3" step="0.5" value="1">
+      </div>
+    </div>
+  </details>
 
   <div id="msg"></div>
 
@@ -141,295 +211,13 @@
     Routen sind Vorschläge – Beschilderung und Verkehrsregeln vor Ort haben Vorrang.
   </footer>
 </div>
-<div id="map"></div>
+<div id="mapwrap">
+  <div id="map"></div>
+  <div id="modebar"><span id="modetxt"></span><button id="modeDone" style="display:none">Fertig</button><button id="modeCancel">Abbrechen</button></div>
+  <div id="toast" role="status"></div>
+</div>
 
 <script src="/static/vendor/leaflet.js"></script>
-<script>
-"use strict";
-const $ = (id) => document.getElementById(id);
-const COLORS = { own: "#1f9d55", calm: "#e0a100", road: "#d63c3c" };
-let cfg = null, map, routeLayer = L.layerGroup(), baseLayer = L.layerGroup();
-let points = [];           // [{lat, lon, label}]
-let markers = [];
-let lastRequest = null, timer = null, reqId = 0;
-let routes = [], selected = 0, altLayer = L.layerGroup();
-
-const fmtKm = (m) => (m / 1000).toLocaleString("de-DE", { maximumFractionDigits: 1, minimumFractionDigits: 1 }) + " km";
-const fmtTime = (s) => { const m = Math.round(s / 60); return m >= 60 ? Math.floor(m / 60) + " h " + String(m % 60).padStart(2, "0") + " min" : m + " min"; };
-
-// Regler ausblenden (Element bleibt erhalten, damit der Zugriff auf .value nicht fehlschlägt) und Hinweis zeigen
-function disableSlider(boxId, text) {
-  const box = $(boxId);
-  [...box.children].forEach((c) => (c.style.display = "none"));
-  const note = document.createElement("div");
-  note.className = "note warn";
-  note.textContent = text;
-  box.appendChild(note);
-}
-
-async function init() {
-  const cr = await fetch("/api/config");
-  if (cr.status === 401) { location.href = "/login"; return; }
-  cfg = await cr.json();
-  if (cfg.auth) $("logout").style.display = "inline-block";
-  const [minLon, minLat, maxLon, maxLat] = cfg.bbox;
-  map = L.map("map", { zoomControl: true }).fitBounds([[minLat, minLon], [maxLat, maxLon]]);
-  L.tileLayer(cfg.tiles.url, { attribution: cfg.tiles.attribution, maxZoom: 19 }).addTo(map);
-  map.setMaxBounds([[minLat - 0.5, minLon - 0.5], [maxLat + 0.5, maxLon + 0.5]]);
-  routeLayer.addTo(map); baseLayer.addTo(map); altLayer.addTo(map);
-  for (const p of cfg.profiles) $("profile").add(new Option(p.label, p.id));
-  $("profile").value = cfg.default_profile;
-  if (!cfg.has_center) {
-    disableSlider("centerBox", "Keine Geschäfts-/Gastronomie-Daten im Graphen – „Innenstadt meiden“ ist nicht verfügbar (Graph neu bauen, siehe README).");
-  }
-  if (!cfg.has_urban) {
-    disableSlider("urbanBox", "Keine Siedlungsflächen im Graphen – „Bebauung meiden“ ist nicht verfügbar (Graph neu bauen, siehe README).");
-  }
-  if (!cfg.has_elevation) {
-    disableSlider("hillsBox", "Keine Höhendaten im Graphen – Steigungen werden nicht berücksichtigt (siehe README: fahrradnavi dem).");
-  }
-  map.on("click", (e) => addPoint(e.latlng.lat, e.latlng.lng));
-  renderPoints(); updateLabels();
-  const h = location.hash.match(/^#r=(.+)$/);
-  if (h) restoreFromHash(h[1]);
-}
-
-// ---- Punkte ------------------------------------------------------------
-function filled() { return points.filter(Boolean); }
-function addPoint(lat, lon, label) {
-  const p = { lat, lon, label: label || `${lat.toFixed(5)}, ${lon.toFixed(5)}` };
-  const slots = Math.max(2, points.length);
-  let i = -1;
-  for (let k = 0; k < slots; k++) if (!points[k]) { i = k; break; }
-  if (i < 0) { if (points.length >= 12) return; i = points.length; }
-  points[i] = p;
-  renderPoints(); scheduleRoute();
-}
-function removePoint(i) {
-  if (Math.max(2, points.length) <= 2) points[i] = null; else points.splice(i, 1);
-  while (points.length && !points[points.length - 1] && points.length > 2) points.pop();
-  renderPoints(); scheduleRoute();
-}
-function renderPoints() {
-  const box = $("points"); box.innerHTML = "";
-  markers.forEach((m) => m.remove()); markers = [];
-  const n = filled().length;
-  const slots = Math.max(2, points.length);
-  for (let i = 0; i < slots; i++) {
-    const p = points[i];
-    const isStart = i === 0, isEnd = i === slots - 1;
-    const color = isStart ? "#1f9d55" : isEnd ? "#d63c3c" : "#3b6fd4";
-    const row = document.createElement("div");
-    row.className = "pt row"; row.style.marginBottom = "6px";
-    row.innerHTML = `<span class="dot" style="background:${color}">${isStart ? "A" : isEnd ? "B" : i}</span>
-      <input type="text" placeholder="${isStart ? "Start" : isEnd ? "Ziel" : "Zwischenziel"} suchen …" value="${p ? p.label.replace(/"/g, "&quot;") : ""}" autocomplete="off">
-      ${p ? '<button class="x" title="Entfernen">×</button>' : ""}`;
-    const input = row.querySelector("input");
-    setupSearch(row, input, i);
-    const x = row.querySelector(".x");
-    if (x) x.onclick = () => removePoint(i);
-    box.appendChild(row);
-    if (p) {
-      const icon = L.divIcon({ className: "", html: `<div style="background:${color};color:#fff;width:26px;height:26px;border-radius:50%;display:grid;place-items:center;font-weight:700;border:2px solid #fff;box-shadow:0 1px 5px rgba(0,0,0,.4)">${isStart ? "A" : isEnd ? "B" : i}</div>`, iconSize: [26, 26], iconAnchor: [13, 13] });
-      const m = L.marker([p.lat, p.lon], { icon, draggable: true }).addTo(map);
-      m.on("dragend", () => { const ll = m.getLatLng(); p.lat = ll.lat; p.lon = ll.lng; p.label = `${ll.lat.toFixed(5)}, ${ll.lng.toFixed(5)}`; renderPoints(); scheduleRoute(); });
-      markers.push(m);
-    }
-  }
-  $("clickhint").style.display = n >= 2 ? "none" : "block";
-}
-function setupSearch(row, input, i) {
-  let t = null, box = null;
-  const close = () => { if (box) { box.remove(); box = null; } };
-  input.addEventListener("input", () => {
-    clearTimeout(t); close();
-    const q = input.value.trim();
-    if (q.length < 2) return;
-    t = setTimeout(async () => {
-      const c = map.getCenter();
-      const r = await fetch(`/api/geocode?q=${encodeURIComponent(q)}&lat=${c.lat}&lon=${c.lng}`);
-      if (!r.ok) return;
-      const res = await r.json();
-      close();
-      if (!res.length) return;
-      box = document.createElement("div"); box.className = "suggest";
-      for (const s of res) {
-        const d = document.createElement("div");
-        d.innerHTML = `${s.name.replace(/</g, "&lt;")}<small>${s.kind}</small>`;
-        d.onclick = () => {
-          points[i] = { lat: s.lat, lon: s.lon, label: s.name };
-          close(); renderPoints(); map.panTo([s.lat, s.lon]); scheduleRoute();
-        };
-        box.appendChild(d);
-      }
-      row.appendChild(box);
-    }, 250);
-  });
-  input.addEventListener("blur", () => setTimeout(close, 200));
-}
-$("addVia").onclick = () => { $("clickhint").style.display = "block"; $("clickhint").textContent = "Klick auf die Karte fügt einen Punkt hinzu (der letzte Punkt ist das Ziel)."; };
-$("swap").onclick = () => { while (points.length < 2) points.push(null); points.reverse(); renderPoints(); scheduleRoute(); };
-$("reset").onclick = () => { points = []; renderPoints(); routeLayer.clearLayers(); baseLayer.clearLayers(); altLayer.clearLayers(); routes = []; $("alts").style.display = "none"; $("stats").style.display = "none"; $("msg").style.display = "none"; location.hash = ""; };
-
-// ---- Einstellungen -------------------------------------------------------
-function updateLabels() {
-  const a = +$("avoid").value, h = +$("hills").value, s = +$("surface").value, c = +$("calm").value, u = +$("urban").value, ci = +$("center").value;
-  $("centerTxt").textContent = ci === 0 ? "egal" : ci < 1 ? "leicht" : ci === 1 ? "normal" : ci < 2.5 ? "stark" : "maximal";
-  $("urbanTxt").textContent = u === 0 ? "egal" : u < 1 ? "leicht" : u === 1 ? "normal" : u < 2.5 ? "stark" : "maximal";
-  $("calmTxt").textContent = c === 0 ? "egal" : c < 1 ? "leicht" : c === 1 ? "normal" : c < 2.5 ? "stark" : "maximal";
-  $("avoidTxt").textContent = a === 0 ? "egal" : a < 1 ? "leicht" : a === 1 ? "konsequent" : "extrem";
-  $("hillsTxt").textContent = h === 0 ? "egal" : h < 1 ? "leicht" : h === 1 ? "normal" : h < 2.5 ? "stark" : "sehr stark";
-  $("surfaceTxt").textContent = s === 0 ? "egal" : s < 1 ? "leicht" : s === 1 ? "normal" : s < 2.5 ? "stark" : "sehr stark";
-}
-for (const id of ["avoid", "calm", "center", "urban", "hills", "surface", "profile"]) {
-  $(id).addEventListener("input", () => { updateLabels(); scheduleRoute(); });
-}
-
-// ---- Routing -------------------------------------------------------------
-function scheduleRoute() { clearTimeout(timer); timer = setTimeout(route, 250); }
-function requestBody(compare) {
-  return {
-    points: filled().map((p) => ({ lat: p.lat, lon: p.lon })),
-    profile: $("profile").value,
-    avoid_roads: +$("avoid").value, calm: +$("calm").value, urban: cfg.has_urban ? +$("urban").value : 0, center: cfg.has_center ? +$("center").value : 0, hills: +$("hills").value, surface: +$("surface").value,
-    compare, alternatives: 3,
-  };
-}
-async function route() {
-  if (filled().length < 2) return;
-  const my = ++reqId;
-  $("msg").style.display = "none";
-  document.body.style.cursor = "progress";
-  try {
-    const body = requestBody(true);
-    const r = await fetch("/api/route", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
-    if (my !== reqId) return;
-    if (r.status === 401) { location.href = "/login"; return; }
-    if (!r.ok) {
-      const e = await r.json().catch(() => ({}));
-      throw new Error(e.detail || "Fehler " + r.status);
-    }
-    const d = await r.json();
-    routes = d.routes || [d];
-    selectRoute(d.recommended || 0, true);
-    lastRequest = body;
-    history.replaceState(null, "", "#r=" + btoa(unescape(encodeURIComponent(JSON.stringify(filled().map((p) => [+p.lat.toFixed(5), +p.lon.toFixed(5)]))))));
-  } catch (err) {
-    routeLayer.clearLayers(); baseLayer.clearLayers(); altLayer.clearLayers(); $("alts").style.display = "none"; $("stats").style.display = "none";
-    $("msg").textContent = err.message; $("msg").style.display = "block";
-  } finally { if (my === reqId) document.body.style.cursor = ""; }
-}
-function selectRoute(i, fit) {
-  selected = i;
-  renderAlts();
-  altLayer.clearLayers();
-  routes.forEach((r, j) => {
-    if (j === i) return;
-    const l = L.geoJSON(r.segments, { style: { color: "#3b6fd4", weight: 5, opacity: .55, lineCap: "round" } });
-    l.on("click", () => selectRoute(j, false));
-    l.bindTooltip(`${r.label || "Alternative"} – klicken zum Auswählen`, { sticky: true });
-    altLayer.addLayer(l);
-  });
-  show(routes[i], fit);
-}
-function renderAlts() {
-  const box = $("alts");
-  if (routes.length < 2) { box.style.display = "none"; return; }
-  box.style.display = "flex";
-  box.innerHTML = "";
-  routes.forEach((r, i) => {
-    const s = r.stats;
-    const b = document.createElement("button");
-    b.className = "alt" + (i === selected ? " sel" : "");
-    b.innerHTML = `<b>${r.label}</b><span>${fmtKm(s.distance_m)} · Autostraße ${fmtKm(s.road_m)} · Wohnstraße ${fmtKm(s.calm_m)}${cfg.has_urban && +$("urban").value > 0 ? " · Bebauung " + fmtKm(s.urban_m) : ""}${cfg.has_center && +$("center").value > 0 ? " · Innenstadt " + fmtKm(s.center_m) : ""} · ${fmtTime(s.duration_s)}</span>`;
-    b.onclick = () => selectRoute(i, false);
-    box.appendChild(b);
-  });
-}
-function show(d, fit = true) {
-  routeLayer.clearLayers(); baseLayer.clearLayers();
-  if (d.baseline && +$("avoid").value > 0) {
-    L.geoJSON(d.baseline, { style: { color: "#7a7f8a", weight: 4, opacity: .8, dashArray: "6 8" } }).addTo(baseLayer);
-  }
-  const casing = L.geoJSON(d.segments, { style: { color: "#fff", weight: 9, opacity: .9, lineCap: "round", lineJoin: "round" }, interactive: false });
-  routeLayer.addLayer(casing);
-  const line = L.geoJSON(d.segments, {
-    style: (f) => ({ color: COLORS[f.properties.kind] || "#333", weight: 5, opacity: 1, lineCap: "round", lineJoin: "round" }),
-    onEachFeature: (f, layer) => {
-      const p = f.properties;
-      const kind = { own: "eigener Weg", calm: "ruhige Straße", road: "Autostraße" }[p.kind];
-      layer.bindTooltip(`${p.name || "(ohne Namen)"}<br>${kind} · ${p.surface} · ${Math.round(p.length_m)} m`, { sticky: true });
-    },
-  });
-  routeLayer.addLayer(line);
-  if (fit) map.fitBounds(line.getBounds(), { padding: [50, 50] });
-
-  const s = d.stats, tot = s.distance_m || 1;
-  $("stats").style.display = "block";
-  $("sDist").textContent = fmtKm(s.distance_m);
-  $("sTime").textContent = fmtTime(s.duration_s);
-  $("sAsc").textContent = s.has_elevation ? `↑ ${s.ascent_m} m  ↓ ${s.descent_m} m` : "–";
-  $("sUnp").textContent = fmtKm(s.unpaved_m);
-  $("sUrbBox").style.display = cfg.has_urban ? "" : "none";
-  $("sUrb").textContent = fmtKm(s.urban_m || 0);
-  $("sCenBox").style.display = cfg.has_center ? "" : "none";
-  $("sCen").textContent = fmtKm(s.center_m || 0);
-  $("sSig").textContent = s.signals;
-  $("lOwn").textContent = fmtKm(s.own_m); $("lCalm").textContent = fmtKm(s.calm_m); $("lRoad").textContent = fmtKm(s.road_m);
-  $("sBar").innerHTML = ["own", "calm", "road"].map((k) => `<div style="width:${(s[k + "_m"] / tot * 100).toFixed(1)}%;background:${COLORS[k]}"></div>`).join("");
-  const dt = $("detour");
-  if (s.baseline) {
-    const extra = s.detour_m;
-    if (Math.abs(extra) < 50 && s.baseline.road_m - s.road_m < 50) {
-      dt.textContent = "Die kürzeste Route ist hier bereits die straßenärmste.";
-    } else {
-      dt.innerHTML = `Umweg gegenüber der kürzesten Route: <b>${extra >= 0 ? "+" : ""}${fmtKm(extra)}</b> – dafür <b>${fmtKm(Math.max(0, s.baseline.road_m - s.road_m))}</b> weniger auf Autostraßen (${fmtKm(s.baseline.road_m)} → ${fmtKm(s.road_m)}). Grau gestrichelt: kürzeste Route.`;
-    }
-    dt.style.display = "block";
-  } else dt.style.display = "none";
-  if (s.road_m > 50) {
-    dt.innerHTML += `<br><span style="color:var(--road)">Rot markiert: ${fmtKm(s.road_m)} Autostraße ließen sich nicht umgehen.</span>`;
-  }
-  drawElevation(d.elevation);
-}
-function drawElevation(pts) {
-  const c = $("elev");
-  if (!pts || pts.length < 2) { c.style.display = "none"; return; }
-  c.style.display = "block";
-  const dpr = window.devicePixelRatio || 1, w = c.clientWidth, h = c.clientHeight;
-  c.width = w * dpr; c.height = h * dpr;
-  const g = c.getContext("2d"); g.scale(dpr, dpr); g.clearRect(0, 0, w, h);
-  const xs = pts.map((p) => p[0]), ys = pts.map((p) => p[1]);
-  const x1 = xs[xs.length - 1] || 1, lo = Math.min(...ys), hi = Math.max(...ys), span = Math.max(hi - lo, 20);
-  const X = (x) => 4 + (x / x1) * (w - 8), Y = (y) => h - 14 - ((y - lo) / span) * (h - 24);
-  const st = getComputedStyle(document.body);
-  g.beginPath(); g.moveTo(X(xs[0]), h - 14);
-  pts.forEach((p) => g.lineTo(X(p[0]), Y(p[1])));
-  g.lineTo(X(x1), h - 14); g.closePath();
-  g.fillStyle = "rgba(31,157,85,.25)"; g.fill();
-  g.beginPath(); pts.forEach((p, i) => (i ? g.lineTo(X(p[0]), Y(p[1])) : g.moveTo(X(p[0]), Y(p[1]))));
-  g.strokeStyle = "#1f9d55"; g.lineWidth = 1.6; g.stroke();
-  g.fillStyle = st.getPropertyValue("--muted"); g.font = "11px system-ui";
-  g.fillText(Math.round(lo) + " m", 4, h - 2); g.fillText(Math.round(hi) + " m", 4, 11);
-  g.textAlign = "right"; g.fillText(x1.toFixed(1) + " km", w - 4, h - 2);
-}
-$("gpx").onclick = async () => {
-  if (!lastRequest) return;
-  const r = await fetch("/api/gpx", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ...lastRequest, compare: false, pick: selected }) });
-  if (!r.ok) return;
-  const a = document.createElement("a");
-  a.href = URL.createObjectURL(await r.blob()); a.download = "fahrradnavi-route.gpx"; a.click();
-  setTimeout(() => URL.revokeObjectURL(a.href), 5000);
-};
-function restoreFromHash(b64) {
-  try {
-    const arr = JSON.parse(decodeURIComponent(escape(atob(b64))));
-    points = arr.map(([lat, lon]) => ({ lat, lon, label: `${lat.toFixed(5)}, ${lon.toFixed(5)}` }));
-    renderPoints(); route();
-  } catch (e) { /* ignorieren */ }
-}
-$("logout").onclick = async () => { await fetch("/logout", { method: "POST" }); location.href = "/login"; };
-init();
-</script>
+<script src="/static/app.js?v=__V__"></script>
 </body>
 </html>
