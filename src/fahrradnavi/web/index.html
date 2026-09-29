@@ -83,13 +83,20 @@
   #modebar { position: absolute; z-index: 1000; left: 50%; top: 10px; transform: translateX(-50%); display: none; gap: 8px; align-items: center; background: var(--panel); color: var(--ink); border: 1px solid var(--line); border-radius: 10px; padding: 8px 12px; box-shadow: 0 4px 16px rgba(0,0,0,.25); max-width: 92%; font-size: 14px; }
   #modebar button { border: 1px solid var(--line); background: var(--bg); color: var(--ink); border-radius: 8px; padding: 4px 10px; cursor: pointer; font: inherit; }
   #mapwrap { position: relative; flex: 1; height: 100%; }
-  #mapwrap #map { position: absolute; inset: 0; }
+  #mapwrap #map { position: absolute; inset: 0; z-index: 0; }  /* eigener Stapelkontext: Hinweise liegen über allen Karten-Ebenen */
   #toast { position: absolute; z-index: 1000; bottom: 24px; left: 50%; transform: translateX(-50%); background: #222; color: #fff; padding: 8px 14px; border-radius: 8px; display: none; max-width: 90%; font-size: 14px; }
   .ghost { width: 16px; height: 16px; border-radius: 50%; background: #fff; border: 3px solid #3b6fd4; box-shadow: 0 1px 4px rgba(0,0,0,.5); cursor: grab; }
   .popbtn { display: block; width: 100%; margin: 4px 0; padding: 6px 8px; border: 1px solid #ccc; background: #f6f7f4; color: #1d2320; border-radius: 6px; cursor: pointer; font: inherit; text-align: left; }
   .check { display: flex; align-items: center; gap: 6px; font-size: 14px; }
   .check input { width: auto; }
   #tripBox { display: none; flex-direction: column; gap: 10px; }
+  #busy { position: absolute; inset: 0; z-index: 1100; display: none; align-items: center; justify-content: center; gap: 14px;
+          background: rgba(20, 24, 26, .28); color: #fff; font-size: 16px; pointer-events: none; }
+  #busy > div:last-child { background: #1c2124; padding: 12px 16px; border-radius: 10px; box-shadow: 0 4px 18px rgba(0,0,0,.35); }
+  #busy #busyTime { font-size: 13px; opacity: .85; margin-top: 2px; }
+  #busy .spin { width: 42px; height: 42px; border-radius: 50%; border: 5px solid rgba(255,255,255,.35); border-top-color: #38b26f; animation: spin .8s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  @media (prefers-reduced-motion: reduce) { #busy .spin { animation-duration: 2.5s; } }
   @media (max-width: 760px) { #mapwrap { height: 45%; flex: none; } }
 </style>
 </head>
@@ -114,6 +121,7 @@
   <div class="hint" id="clickhint">Auf die Karte klicken, um Start und Ziel zu setzen – oder oben nach Orten suchen. Route an der Linie ziehen, um Zwischenziele einzufügen.</div>
 
   <div id="tripBox">
+    <button class="btn" id="addStation" style="align-self:flex-start" title="Ort, den die Rundreise anfahren soll">+ Station</button>
     <div class="slider">
       <div class="top"><span>Länge der Rundreise</span><span id="tripKmTxt"></span></div>
       <input type="range" id="tripKm" min="5" max="150" step="1" value="40">
@@ -125,9 +133,10 @@
         <option value="0">Nord</option><option value="45">Nordost</option><option value="90">Ost</option><option value="135">Südost</option>
         <option value="180">Süd</option><option value="225">Südwest</option><option value="270">West</option><option value="315">Nordwest</option>
       </select>
+      <div class="hint" id="tripHeadingNote" style="display:none;margin-top:4px">Mit Stationen ergibt sich die Richtung aus deinen Stationen.</div>
     </div>
     <button class="btn primary" id="tripGo">Rundreise berechnen</button>
-    <div class="hint">Start = Punkt A (Karte anklicken oder suchen). Die Schleifen werden mit deinen Reglern, gemiedenen Bereichen und Lieblingswegen berechnet.</div>
+    <div class="hint">Start = Punkt A. Stationen (optional) werden der Reihe nach angefahren; ist die Schleife darüber kürzer als gewünscht, wird sie mit einem Umweg verlängert. Regler, gemiedene Bereiche und Lieblingswege gelten auch hier.</div>
   </div>
 
   <details class="card" id="toolsCard" open>
@@ -216,6 +225,7 @@
   <div id="map"></div>
   <div id="modebar"><span id="modetxt"></span><button id="modeDone" style="display:none">Fertig</button><button id="modeCancel">Abbrechen</button></div>
   <div id="toast" role="status"></div>
+  <div id="busy" role="status" aria-live="polite"><div class="spin"></div><div><b id="busyTxt"></b><div id="busyTime"></div></div></div>
 </div>
 
 <script src="/static/vendor/leaflet.js"></script>

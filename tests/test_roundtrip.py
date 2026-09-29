@@ -228,3 +228,61 @@ def test_spike_length_detects_parallel_return(tmp_path):
     assert r._spike_length(spiky.legs[0], spiky.legs[1]) >= 1400
     loop = r.route([to_ll(0, 0), to_ll(2000, -2000), to_ll(4000, 0)], "trekking", Options())
     assert r._spike_length(loop.legs[0], loop.legs[1]) < 400
+
+
+# --- Rundreisen mit Stationen -----------------------------------------------------------------------
+
+
+def near_m(c, pt):
+    return min(math.hypot((p[0] - pt[1]) * 74_600, (p[1] - pt[0]) * 110_574) for p in c.coords)
+
+
+def test_round_trip_through_stations_is_extended_to_target(grid):
+    r = Router(grid)
+    st = [to_ll(7000, 5000)]  # 2 km östlich: Grundschleife ~4 km
+    loops = r.round_trips(CENTER, 12_000, "trekking", Options(), n=3, stations=st)
+    assert loops
+    for c in loops:
+        assert near_m(c, st[0]) < 30  # Station wird angefahren
+        assert c.coords[0][:2] == pytest.approx(c.coords[-1][:2], abs=1e-6)
+        assert c.stats["roundtrip"]["stations"] == 1
+    assert abs(loops[0].stats["distance_m"] - 12_000) / 12_000 < 0.2
+    assert loops[0].stats["roundtrip"]["min_m"] < 6000
+
+
+def test_round_trip_stations_order_and_min_length_note(grid):
+    r = Router(grid)
+    st = [to_ll(8000, 5000), to_ll(8000, 8000), to_ll(5000, 8000)]  # Grundschleife ~12 km
+    loops = r.round_trips(CENTER, 5_000, "trekking", Options(), n=3, stations=st)
+    assert len(loops) == 1
+    c = loops[0]
+    assert "mindestens" in c.stats["roundtrip"]["note"]
+    assert c.stats["distance_m"] > 11_000
+    # Reihenfolge: Stationen werden in der angegebenen Reihenfolge erreicht
+    idx = [min(range(len(c.coords)), key=lambda i: math.hypot((c.coords[i][0] - s[1]) * 74_600, (c.coords[i][1] - s[0]) * 110_574)) for s in st]
+    assert idx == sorted(idx)
+
+
+def test_station_at_dead_end_is_kept(grid_with_spurs):
+    """Eine Station am Ende einer Sackgasse muss angefahren werden – der Stichweg dorthin darf nicht entfernt werden."""
+    r = Router(grid_with_spurs)
+    st = [to_ll(6000 + 140, 5000 + 140)]  # Ende eines Stichs
+    for c in r.round_trips(CENTER, 10_000, "trekking", Options(), n=2, stations=st):
+        assert near_m(c, st[0]) < 20
+
+
+def test_station_outside_map_gives_clear_error(grid):
+    r = Router(grid)
+    with pytest.raises(NoRouteError, match="entfernt"):
+        r.round_trips(CENTER, 12_000, "trekking", Options(), stations=[(10.0, 10.0)])
+
+
+def test_api_roundtrip_with_stations(client):
+    st = to_ll(7000, 5000)
+    body = {"points": [{"lat": CENTER[0], "lon": CENTER[1]}, {"lat": st[0], "lon": st[1]}],
+            "roundtrip": {"distance_km": 12}, "alternatives": 3}
+    d = client.post("/api/route", json=body).json()
+    assert d["stats"]["roundtrip"]["stations"] == 1
+    assert d["coordinates"][0][:2] == pytest.approx(d["coordinates"][-1][:2], abs=1e-6)
+    g = client.post("/api/gpx", json={**body, "pick": 0})
+    assert g.status_code == 200 and "Rundreise" in g.text

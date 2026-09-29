@@ -70,7 +70,8 @@ class RouteRequest(BaseModel):
     avoid_areas: list[AreaIn] = Field(default_factory=list, max_length=ov.MAX_AREAS)
     favorites: list[FavoriteIn] = Field(default_factory=list, max_length=ov.MAX_FAVORITES)
     loop: bool = Field(False, description="Zurück zum Start: der erste Punkt wird als Ziel angehängt")
-    roundtrip: RoundtripIn | None = Field(None, description="Rundreise ab dem ersten Punkt mit gewünschter Länge")
+    roundtrip: RoundtripIn | None = Field(
+        None, description="Rundreise ab dem ersten Punkt mit gewünschter Länge; weitere Punkte sind Stationen, die angefahren werden")
 
     @model_validator(mode="after")
     def _check(self) -> "RouteRequest":
@@ -217,6 +218,7 @@ def create_app(
                 return router.round_trips(
                     pts[0], req.roundtrip.distance_km * 1000.0, req.profile, req.options(), overlays,
                     n=max(1, req.alternatives), heading=req.roundtrip.heading, exposure=exposure_m,
+                    stations=pts[1:] or None,  # weitere Punkte = Stationen, die die Rundreise anfährt
                 )
             best = router.route(pts, req.profile, req.options(), compare=req.compare, overlays=overlays)
             if req.alternatives <= 0:

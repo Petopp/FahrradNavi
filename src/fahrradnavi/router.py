@@ -498,15 +498,20 @@ class Router:
                 continue
         return None
 
-    def _remove_spurs(self, legs: list[Leg], costs: Costs) -> tuple[Leg, float]:
+    def _remove_spurs(self, legs: list[Leg], costs: Costs, keep_before: set[int] | None = None) -> tuple[Leg, float]:
         """Entfernt Stichwege (Hin und auf demselben Weg wieder zurück) aus einer Rundreise.
 
         Die Route wird in einzelne Vertex-Schritte zerlegt; folgt auf einen Schritt A→B auf Kante e direkt B→A auf e,
         heben sich beide auf (Stapelverfahren, auch verschachtelt). Übrig bleibt eine Kante höchstens einmal je Richtung
-        in Folge. Rückgabe: (eine Teilstrecke, Überlappungsanteil nach Länge)."""
+        in Folge. ``keep_before``: Indizes von Teilstrecken, die an einer Nutzer-Station beginnen – ein Stichweg zu
+        dieser Station bleibt erhalten (sie soll ja angefahren werden).
+        Rückgabe: (eine Teilstrecke, Überlappungsanteil nach Länge)."""
         g = self.g
         stack: list[tuple[int, int, int]] = []  # (Kante, Vertex von, Vertex nach)
-        for leg in legs:
+        barrier = (-1, -1, -1)
+        for li, leg in enumerate(legs):
+            if keep_before and li in keep_before:
+                stack.append(barrier)
             for p in leg.pieces:
                 v = p.vidx
                 if v is None or len(v) < 2:
@@ -531,6 +536,8 @@ class Router:
             pieces.append(Piece(edge=run_edge, reverse=not run_fwd, lat=lat, lon=lon, ele=ele / 10.0, share=share, vidx=idx))
 
         for e, a, b in stack:
+            if e < 0:  # Sperre
+                continue
             fwd = b > a
             if e == run_edge and fwd == run_fwd and run and run[-1] == a:
                 run.append(b)
@@ -600,25 +607,34 @@ class Router:
         return spike
 
     def _route_progressive(
-        self, points: list[tuple[float, float]], prof: Profile, opts: Options, overlays: Overlays | None, penalty: float = 2.5,
+        self, points: list[tuple[float, float]], prof: Profile, opts: Options, overlays: Overlays | None,
+        penalty: float = 2.5, fixed: frozenset[int] = frozenset(),
     ) -> tuple[RouteResult, float]:
         """Rundreise durch ``points`` (Start … Start). Kanten früherer Teilstrecken sind für spätere teurer
-        (vermeidet Hin-und-zurück), Stichwege zu den Zwischenpunkten werden anschließend entfernt.
+        (vermeidet Hin-und-zurück), Stichwege zu erzeugten Zwischenpunkten werden anschließend entfernt.
 
+        ``fixed``: Indizes in ``points``, die Nutzer-Stationen sind – sie werden genau angefahren, nie weggelassen.
         Rückgabe: (Ergebnis mit einer Teilstrecke, Überlappungsanteil 0..1 nach Länge)."""
         costs = self.effective_costs(prof, opts, overlays)
         start = self.snap(points[0][0], points[0][1], costs)
-        vias = [self._snap_soft(la, lo, points[0], costs) for la, lo in points[1:-1]]
-        vias = [v for v in vias if v is not None]
-        if not vias:
+        wps: list[tuple[Snap, bool]] = []
+        for k, (la, lo) in enumerate(points[1:-1], start=1):
+            if k in fixed:
+                wps.append((self.snap(la, lo, costs), True))
+            else:
+                sn = self._snap_soft(la, lo, points[0], costs)
+                if sn is not None:
+                    wps.append((sn, False))
+        if not wps:
             raise NoRouteError("Keine Wege für die Zwischenpunkte der Rundreise gefunden.")
-        legs = self._progressive_legs([start, *vias, start], costs, penalty)
-        # Zwischenpunkte, zu denen die Route als "Spitze" hin und (auf einem Parallelweg) zurück fährt, weglassen
-        spiky = [i for i in range(len(vias)) if self._spike_length(legs[i], legs[i + 1]) > SPIKE_MAX_M]
-        if spiky and len(spiky) < len(vias):
-            vias = [v for i, v in enumerate(vias) if i not in spiky]
-            legs = self._progressive_legs([start, *vias, start], costs, penalty)
-        leg, overlap = self._remove_spurs(legs, costs)
+        legs = self._progressive_legs([start, *[w for w, _ in wps], start], costs, penalty)
+        # erzeugte Zwischenpunkte, zu denen die Route als "Spitze" hin und (auf einem Parallelweg) zurück fährt, weglassen
+        spiky = [i for i, (_, f) in enumerate(wps) if not f and self._spike_length(legs[i], legs[i + 1]) > SPIKE_MAX_M]
+        if spiky and len(spiky) < len(wps):
+            wps = [w for i, w in enumerate(wps) if i not in spiky]
+            legs = self._progressive_legs([start, *[w for w, _ in wps], start], costs, penalty)
+        keep = {i + 1 for i, (_, f) in enumerate(wps) if f}
+        leg, overlap = self._remove_spurs(legs, costs, keep_before=keep)
         res = RouteResult(legs=[leg], snaps=[start, start], profile=prof, options=opts, cost=leg.cost)
         self._summarize(res, costs, [points[0], points[0]])
         return res, overlap
@@ -634,6 +650,7 @@ class Router:
         heading: float | None = None,
         tolerance: float = 0.12,
         exposure=None,
+        stations: list[tuple[float, float]] | None = None,
     ) -> list[RouteResult]:
         """Rundreisen ab ``start`` mit etwa ``target_m`` Länge.
 
@@ -644,6 +661,8 @@ class Router:
         """
         prof = get_profile(profile) if isinstance(profile, str) else profile
         opts = options or Options()
+        if stations:
+            return self._round_trips_with_stations(start, list(stations), target_m, prof, opts, overlays, n, tolerance, exposure)
         lat0, lon0 = start
         kx = 111_320.0 * math.cos(math.radians(lat0))
         ky = 110_574.0
@@ -686,6 +705,14 @@ class Router:
                 cands.append(best_here)
         if not cands:
             raise NoRouteError("Für diese Länge und Richtung liegt keine Rundreise im Kartengebiet.")
+        return self._pick_round_trips(cands, target_m, n, exposure)
+
+
+    def _pick_round_trips(
+        self, cands: list[tuple[RouteResult, float]], target_m: float, n: int, exposure, max_shared: float = 0.6,
+    ) -> list[RouteResult]:
+        """Bewertet Rundreise-Kandidaten (Länge, Überlappung, Spitzen, Kosten, Straßenanteil) und wählt bis zu ``n``
+        deutlich verschiedene aus."""
         # Varianten, die weit von der Wunschlänge abweichen, nur behalten, wenn es keine besseren gibt
         dev_of = lambda c: abs(c[0].stats["distance_m"] - target_m) / target_m  # noqa: E731
         good = [c for c in cands if dev_of(c) <= 0.3]
@@ -717,9 +744,76 @@ class Router:
                 if any(c is o for o in chosen) or (not allow_spikes and c.stats["roundtrip"].get("spike_m", 0) > 1000):
                     continue
                 e = set(self._edges(c))
-                if all(len(e & set(self._edges(o))) / max(len(e), 1) < 0.6 for o in chosen):
+                if all(len(e & set(self._edges(o))) / max(len(e), 1) < max_shared for o in chosen):
                     chosen.append(c)
         return chosen
+
+    def _round_trips_with_stations(
+        self, start, stations, target_m, prof, opts, overlays, n, tolerance, exposure,
+    ) -> list[RouteResult]:
+        """Rundreise Start → Stationen (in der angegebenen Reihenfolge) → Start mit Wunschlänge.
+
+        Ist die Schleife über die Stationen kürzer als gewünscht, wird auf einem Abschnitt ein Umweg-Punkt seitlich der
+        Verbindungslinie eingefügt (verschiedene Abschnitte/Seiten ergeben die Varianten) und so skaliert, dass die Länge
+        passt. Ist sie schon länger, wird sie unverändert mit Hinweis zurückgegeben."""
+        fixed_pts = [start, *stations, start]
+        fixed_idx = frozenset(range(1, len(fixed_pts) - 1))
+        base, ovl = self._route_progressive(fixed_pts, prof, opts, overlays, fixed=fixed_idx)
+        base_len = base.stats["distance_m"]
+        base.stats["roundtrip"] = {"target_m": round(target_m), "heading": None, "overlap": round(ovl, 3),
+                                   "stations": len(stations), "min_m": round(base_len)}
+        cands: list[tuple[RouteResult, float]] = [(base, ovl)]
+        extra = target_m - base_len
+        if extra <= tolerance * target_m:
+            if base_len > target_m * (1 + tolerance):
+                base.stats["roundtrip"]["note"] = (
+                    f"Über deine Stationen ist die Rundreise mindestens {base_len / 1000:.1f} km lang."
+                )
+            return [base]
+
+        kappa = 1.35
+        lat0 = start[0]
+        kx = 111_320.0 * math.cos(math.radians(lat0))
+        ky = 110_574.0
+        sections = []
+        for i in range(len(fixed_pts) - 1):
+            (la1, lo1), (la2, lo2) = fixed_pts[i], fixed_pts[i + 1]
+            dx, dy = (lo2 - lo1) * kx, (la2 - la1) * ky
+            sections.append((math.hypot(dx, dy), i, dx, dy))
+        sections.sort(reverse=True)
+        for d, i, dx, dy in sections[:3]:
+            (la1, lo1), (la2, lo2) = fixed_pts[i], fixed_pts[i + 1]
+            mx, my = (lo1 + lo2) / 2, (la1 + la2) / 2
+            if d > 1.0:
+                nx_, ny_ = -dy / d, dx / d
+            else:  # Abschnitt ohne Länge (Station am Start): Richtung vom Start weg
+                nx_, ny_ = 0.0, 1.0
+            for side in (1, -1):
+                want = extra / kappa  # zusätzliche Luftlinie
+                h = math.sqrt(max(((want + d) / 2) ** 2 - (d / 2) ** 2, 1.0))
+                best_here: tuple[RouteResult, float] | None = None
+                for _ in range(3):
+                    wp = (my + side * ny_ * h / ky, mx + side * nx_ * h / kx)
+                    pts = fixed_pts[: i + 1] + [wp] + fixed_pts[i + 1:]
+                    fixed = frozenset(k if k <= i else k + 1 for k in fixed_idx)
+                    try:
+                        res, o = self._route_progressive(pts, prof, opts, overlays, fixed=fixed)
+                    except NoRouteError:
+                        break
+                    length = res.stats["distance_m"]
+                    if best_here is None or abs(length - target_m) < abs(best_here[0].stats["distance_m"] - target_m):
+                        best_here = (res, o)
+                    if abs(length - target_m) / target_m <= tolerance:
+                        break
+                    got = max(length - base_len, 50.0)
+                    h *= max(0.4, min(2.5, (extra / got) ** 0.9))
+                if best_here is not None:
+                    res, o = best_here
+                    res.stats["roundtrip"] = {"target_m": round(target_m), "heading": None, "overlap": round(o, 3),
+                                              "stations": len(stations), "min_m": round(base_len)}
+                    cands.append(best_here)
+        # Varianten teilen die Wege zwischen den Stationen – daher mehr Gemeinsamkeit zulassen
+        return self._pick_round_trips(cands, target_m, n, exposure, max_shared=0.9)
 
     # -- Auswertung -----------------------------------------------------
     def _summarize(self, res: RouteResult, costs: Costs, points) -> None:

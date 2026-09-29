@@ -94,14 +94,25 @@ function onMapClick(e) {
 }
 function addPoint(lat, lon, label) {
   const p = { lat, lon, label: label || `${lat.toFixed(5)}, ${lon.toFixed(5)}` };
-  if (tab === "trip") { points = [p]; renderPoints(); if (tripArmed) scheduleRoute(); return; }
-  const slots = Math.max(2, points.length);
+  const slots = tab === "trip" ? Math.max(1, points.length) : Math.max(2, points.length);
   let i = activeSlot >= 0 && activeSlot < slots && !points[activeSlot] ? activeSlot : -1;
   for (let k = 0; i < 0 && k < slots; k++) if (!points[k]) i = k;
   if (i < 0) { if (points.length >= 12) { toast("Höchstens 12 Punkte."); return; } i = points.length; }
   points[i] = p;
   activeSlot = -1;
-  renderPoints(); scheduleRoute();
+  renderPoints();
+  if (tab === "route" || tripArmed) scheduleRoute();
+  else if (tab === "trip" && i > 0) toast("Station hinzugefügt – „Rundreise berechnen“ starten.");
+}
+// Rundreise: leeres Stations-Feld am Ende anhängen
+function addStationSlot() {
+  if (!points.length) points.push(null);
+  if (points.length >= 12) { toast("Höchstens 11 Stationen."); return; }
+  points.push(null);
+  activeSlot = points.length - 1;
+  renderPoints();
+  const inputs = $("points").querySelectorAll("input");
+  if (inputs[activeSlot]) inputs[activeSlot].focus();
 }
 // Leeres Zwischenziel-Feld vor dem Ziel einfügen; es wird per Suche oder Klick auf die Karte gefüllt
 function addViaSlot() {
@@ -116,15 +127,17 @@ function addViaSlot() {
 }
 function removePoint(i) {
   activeSlot = -1;
-  if (tab === "trip" || Math.max(2, points.length) <= 2) points[i] = null; else points.splice(i, 1);
-  while (points.length && !points[points.length - 1] && points.length > 2) points.pop();
-  renderPoints(); scheduleRoute();
+  if (tab === "trip") { if (i === 0) points[0] = null; else points.splice(i, 1); }
+  else if (Math.max(2, points.length) <= 2) points[i] = null; else points.splice(i, 1);
+  while (tab === "route" && points.length && !points[points.length - 1] && points.length > 2) points.pop();
+  renderPoints();
+  if (tab === "route" || tripArmed) scheduleRoute();
 }
 function renderPoints() {
   const box = $("points"); box.innerHTML = "";
   markers.forEach((m) => m.remove()); markers = [];
   const n = filled().length;
-  const slots = tab === "trip" ? 1 : Math.max(2, points.length);
+  const slots = tab === "trip" ? Math.max(1, points.length) : Math.max(2, points.length);
   for (let i = 0; i < slots; i++) {
     const p = points[i];
     const isStart = i === 0, isEnd = i === slots - 1 && tab !== "trip", isVia = !isStart && !isEnd;
@@ -133,7 +146,7 @@ function renderPoints() {
     const row = document.createElement("div");
     row.className = "pt row"; row.style.marginBottom = "6px";
     row.innerHTML = `<span class="dot" style="background:${color}">${tag}</span>
-      <input type="text" placeholder="${isStart ? "Start" : isEnd ? "Ziel" : "Zwischenziel"} suchen …" autocomplete="off">
+      <input type="text" placeholder="${isStart ? "Start" : isEnd ? "Ziel" : tab === "trip" ? "Station" : "Zwischenziel"} suchen …" autocomplete="off">
       ${p || isVia ? '<button class="x" title="Entfernen">×</button>' : ""}`;
     const input = row.querySelector("input");
     input.value = p ? p.label : "";
@@ -155,7 +168,16 @@ function renderPoints() {
   }
   const emptyVia = tab === "route" && points.some((q, k) => !q && k > 0 && k < slots - 1);
   if (emptyVia) $("clickhint").textContent = "Leeres Zwischenziel: oben einen Ort suchen oder auf die Karte klicken.";
-  $("clickhint").style.display = (tab === "trip" ? n >= 1 : n >= 2 && !emptyVia) ? "none" : "block";
+  if (tab === "trip") {
+    const st = filled().length - (points[0] ? 1 : 0);
+    $("tripHeading").disabled = st > 0;
+    $("tripHeadingNote").style.display = st > 0 ? "block" : "none";
+    $("clickhint").textContent = !points[0] ? "Startpunkt auf der Karte anklicken oder oben suchen."
+      : "Weitere Klicks auf die Karte fügen Stationen hinzu, die die Rundreise anfährt (Reihenfolge wie in der Liste).";
+    $("clickhint").style.display = "block";
+    return;
+  }
+  $("clickhint").style.display = (n >= 2 && !emptyVia) ? "none" : "block";
 }
 function setupSearch(row, input, i) {
   let t = null, box = null;
@@ -207,17 +229,19 @@ function setTab(t) {
   $("tabTrip").classList.toggle("on", t === "trip");
   $("routeTools").style.display = t === "route" ? "" : "none";
   $("tripBox").style.display = t === "trip" ? "flex" : "none";
-  if (t === "trip") points = points.slice(0, 1);
+  // Punkte bleiben erhalten: in der Rundreise werden Zwischenziele/Ziel zu Stationen und umgekehrt
+  points = filled();
+  if (t === "route") $("clickhint").textContent = "Auf die Karte klicken, um Start und Ziel zu setzen – oder oben nach Orten suchen. Route an der Linie ziehen, um Zwischenziele einzufügen.";
   renderPoints(); clearResults();
-  $("clickhint").textContent = t === "trip" ? "Startpunkt auf der Karte anklicken oder oben suchen." : "Auf die Karte klicken, um Start und Ziel zu setzen – oder oben nach Orten suchen. Route an der Linie ziehen, um Zwischenziele einzufügen.";
   if (t === "route") scheduleRoute();
 }
 $("tabRoute").onclick = () => setTab("route");
 $("tabTrip").onclick = () => setTab("trip");
 $("tripKm").oninput = () => { $("tripKmTxt").textContent = $("tripKm").value + " km"; if (tripArmed) scheduleRoute(); };
 $("tripHeading").onchange = () => { if (tripArmed) scheduleRoute(); };
+$("addStation").onclick = addStationSlot;
 $("tripGo").onclick = () => {
-  if (!filled().length) { toast("Bitte zuerst den Startpunkt setzen (Karte anklicken oder suchen)."); return; }
+  if (!points[0]) { toast("Bitte zuerst den Startpunkt setzen (Karte anklicken oder suchen)."); return; }
   tripArmed = true; route();
 };
 $("tripKmTxt").textContent = $("tripKm").value + " km";
@@ -262,16 +286,18 @@ function requestBody(compare) {
   };
   if (tab === "trip") {
     const h = $("tripHeading").value;
-    return { ...base, points: filled().slice(0, 1).map((p) => ({ lat: p.lat, lon: p.lon })), compare: false,
+    // erster Punkt = Start, weitere = Stationen, die die Rundreise anfährt
+    const pts = points[0] ? filled() : [];
+    return { ...base, points: pts.map((p) => ({ lat: p.lat, lon: p.lon })), compare: false,
       roundtrip: { distance_km: +$("tripKm").value, heading: h === "" ? null : +h } };
   }
   return { ...base, points: filled().map((p) => ({ lat: p.lat, lon: p.lon })), loop: $("loop").checked, compare };
 }
 async function route() {
-  if (tab === "trip" ? !(tripArmed && filled().length >= 1) : filled().length < 2) return;
+  if (tab === "trip" ? !(tripArmed && points[0]) : filled().length < 2) return;
   const my = ++reqId;
   $("msg").style.display = "none";
-  document.body.style.cursor = "progress";
+  busy(true, tab === "trip" ? "Rundreise wird berechnet …" : "Route wird berechnet …");
   try {
     const body = requestBody(true);
     const r = await api("/api/route", body);
@@ -290,7 +316,26 @@ async function route() {
     if (my !== reqId) return;
     clearResults();
     $("msg").textContent = err.message; $("msg").style.display = "block";
-  } finally { if (my === reqId) document.body.style.cursor = ""; }
+  } finally { if (my === reqId) busy(false); }
+}
+// Deutlich sichtbarer Hinweis während der Berechnung (Karte abgedunkelt, Zeitanzeige, Knopf gesperrt)
+let busyTimer = null;
+function busy(on, text) {
+  const el = $("busy");
+  clearInterval(busyTimer);
+  document.body.style.cursor = on ? "progress" : "";
+  $("tripGo").disabled = on;
+  $("tripGo").textContent = on ? "Berechne …" : "Rundreise berechnen";
+  clearTimeout(busy._show);
+  if (!on) { el.style.display = "none"; return; }
+  const t0 = Date.now();
+  $("busyTxt").textContent = text;
+  $("busyTime").textContent = "";
+  busy._show = setTimeout(() => (el.style.display = "flex"), 400);  // schnelle Berechnungen nicht aufblitzen lassen
+  busyTimer = setInterval(() => {
+    const sec = Math.round((Date.now() - t0) / 1000);
+    $("busyTime").textContent = sec >= 2 ? `${sec} s` + (tab === "trip" && sec >= 4 ? " – mehrere Varianten werden verglichen" : "") : "";
+  }, 500);
 }
 function selectRoute(i, fit) {
   selected = i;
@@ -357,7 +402,7 @@ function show(d, fit = true) {
   $("sBar").innerHTML = ["own", "calm", "road"].map((k) => `<div style="width:${(s[k + "_m"] / tot * 100).toFixed(1)}%;background:${COLORS[k]}"></div>`).join("");
   const dt = $("detour");
   if (s.roundtrip) {
-    dt.innerHTML = `Rundreise: Wunsch <b>${fmtKm(s.roundtrip.target_m)}</b>, tatsächlich <b>${fmtKm(s.distance_m)}</b>. Überlappung (Hin-und-zurück): ${Math.round(s.roundtrip.overlap * 100)} %.` + (s.roundtrip.note ? `<br><span style="color:var(--road)">${esc(s.roundtrip.note)}</span>` : "");
+    dt.innerHTML = `Rundreise${s.roundtrip.stations ? ` über ${s.roundtrip.stations} Station${s.roundtrip.stations > 1 ? "en" : ""}` : ""}: Wunsch <b>${fmtKm(s.roundtrip.target_m)}</b>, tatsächlich <b>${fmtKm(s.distance_m)}</b>. Überlappung (Hin-und-zurück): ${Math.round(s.roundtrip.overlap * 100)} %.` + (s.roundtrip.note ? `<br><span style="color:var(--road)">${esc(s.roundtrip.note)}</span>` : "");
     dt.style.display = "block";
   } else if (s.baseline) {
     const extra = s.detour_m;
