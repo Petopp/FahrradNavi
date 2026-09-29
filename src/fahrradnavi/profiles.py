@@ -41,9 +41,9 @@ CAR_PENALTY: dict[int, float] = {
     T.HW_SECONDARY: 100.0,
     T.HW_TERTIARY: 40.0,
     T.HW_UNCLASSIFIED: 10.0,
-    T.HW_RESIDENTIAL: 2.2,
-    T.HW_LIVING_STREET: 1.0,
-    T.HW_SERVICE: 1.3,
+    T.HW_RESIDENTIAL: 8.0,
+    T.HW_LIVING_STREET: 1.5,
+    T.HW_SERVICE: 2.0,
 }
 
 # Exponent, mit dem der Auto-Malus je nach Radinfrastruktur abgeschwächt wird
@@ -142,6 +142,8 @@ class Options:
 
     avoid_roads:  Stärke des Straßen-Meidens. 0 = egal, 1 = konsequent (Standard),
                   >1 = noch schärfer.
+    calm:         Zusätzliche Skalierung nur für Wohnstraßen, Spielstraßen und Zufahrten
+                  (Exponent des Malus; 0 = egal, 1 = Standard, 2-3 = möglichst nie durch Wohngebiete).
     hills:        Skalierung der Steigungs-Abneigung. 0 = Steigungen egal, 1 = Profil-Standard.
     surface:      Skalierung der Oberflächen-Abneigung (0 = egal, 1 = Standard, 2 = sehr pingelig).
     signal_cost:  Zeitverlust je Ampel in Meter-Äquivalenten.
@@ -149,13 +151,14 @@ class Options:
     """
 
     avoid_roads: float = 1.0
+    calm: float = 1.0
     hills: float = 1.0
     surface: float = 1.0
     signal_cost: float = 30.0
     route_bonus: float = 0.85
 
     def key(self) -> tuple:
-        return (self.avoid_roads, self.hills, self.surface, self.signal_cost, self.route_bonus)
+        return (self.avoid_roads, self.calm, self.hills, self.surface, self.signal_cost, self.route_bonus)
 
 
 def get_profile(name: str) -> Profile:

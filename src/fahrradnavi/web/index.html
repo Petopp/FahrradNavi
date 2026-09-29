@@ -49,6 +49,11 @@
   .note { font-size: 13px; padding: 8px 10px; border-radius: 8px; background: var(--bg); }
   .note.warn { border: 1px solid var(--calm); }
   canvas { width: 100%; height: 90px; display: block; }
+  #alts { display: none; gap: 6px; flex-direction: column; }
+  #alts .alt { text-align: left; border: 1px solid var(--line); background: var(--bg); color: var(--ink); border-radius: 10px; padding: 8px 10px; cursor: pointer; font: inherit; font-size: 14px; line-height: 1.35; }
+  #alts .alt.sel { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+  #alts .alt b { display: block; }
+  #alts .alt span { color: var(--muted); font-size: 13px; }
   .hint { color: var(--muted); font-size: 13px; }
   footer { margin-top: auto; font-size: 12px; color: var(--muted); }
   a { color: var(--accent); }
@@ -81,6 +86,10 @@
     <div class="top"><span>Straßen meiden</span><span id="avoidTxt"></span></div>
     <input type="range" id="avoid" min="0" max="2" step="0.25" value="1">
   </div>
+  <div class="slider">
+    <div class="top"><span>Wohnstraßen meiden</span><span id="calmTxt"></span></div>
+    <input type="range" id="calm" min="0" max="3" step="0.5" value="1">
+  </div>
   <div class="slider" id="hillsBox">
     <div class="top"><span>Steigungen meiden</span><span id="hillsTxt"></span></div>
     <input type="range" id="hills" min="0" max="3" step="0.5" value="1">
@@ -91,6 +100,8 @@
   </div>
 
   <div id="msg"></div>
+
+  <div id="alts"></div>
 
   <div id="stats">
     <div class="big" id="sDist"></div>
@@ -130,6 +141,7 @@ let cfg = null, map, routeLayer = L.layerGroup(), baseLayer = L.layerGroup();
 let points = [];           // [{lat, lon, label}]
 let markers = [];
 let lastRequest = null, timer = null, reqId = 0;
+let routes = [], selected = 0, altLayer = L.layerGroup();
 
 const fmtKm = (m) => (m / 1000).toLocaleString("de-DE", { maximumFractionDigits: 1, minimumFractionDigits: 1 }) + " km";
 const fmtTime = (s) => { const m = Math.round(s / 60); return m >= 60 ? Math.floor(m / 60) + " h " + String(m % 60).padStart(2, "0") + " min" : m + " min"; };
@@ -140,7 +152,7 @@ async function init() {
   map = L.map("map", { zoomControl: true }).fitBounds([[minLat, minLon], [maxLat, maxLon]]);
   L.tileLayer(cfg.tiles.url, { attribution: cfg.tiles.attribution, maxZoom: 19 }).addTo(map);
   map.setMaxBounds([[minLat - 0.5, minLon - 0.5], [maxLat + 0.5, maxLon + 0.5]]);
-  routeLayer.addTo(map); baseLayer.addTo(map);
+  routeLayer.addTo(map); baseLayer.addTo(map); altLayer.addTo(map);
   for (const p of cfg.profiles) $("profile").add(new Option(p.label, p.id));
   $("profile").value = cfg.default_profile;
   if (!cfg.has_elevation) {
@@ -227,16 +239,17 @@ function setupSearch(row, input, i) {
 }
 $("addVia").onclick = () => { $("clickhint").style.display = "block"; $("clickhint").textContent = "Klick auf die Karte fügt einen Punkt hinzu (der letzte Punkt ist das Ziel)."; };
 $("swap").onclick = () => { while (points.length < 2) points.push(null); points.reverse(); renderPoints(); scheduleRoute(); };
-$("reset").onclick = () => { points = []; renderPoints(); routeLayer.clearLayers(); baseLayer.clearLayers(); $("stats").style.display = "none"; $("msg").style.display = "none"; location.hash = ""; };
+$("reset").onclick = () => { points = []; renderPoints(); routeLayer.clearLayers(); baseLayer.clearLayers(); altLayer.clearLayers(); routes = []; $("alts").style.display = "none"; $("stats").style.display = "none"; $("msg").style.display = "none"; location.hash = ""; };
 
 // ---- Einstellungen -------------------------------------------------------
 function updateLabels() {
-  const a = +$("avoid").value, h = +$("hills").value, s = +$("surface").value;
+  const a = +$("avoid").value, h = +$("hills").value, s = +$("surface").value, c = +$("calm").value;
+  $("calmTxt").textContent = c === 0 ? "egal" : c < 1 ? "leicht" : c === 1 ? "normal" : c < 2.5 ? "stark" : "maximal";
   $("avoidTxt").textContent = a === 0 ? "egal" : a < 1 ? "leicht" : a === 1 ? "konsequent" : "extrem";
   $("hillsTxt").textContent = h === 0 ? "egal" : h < 1 ? "leicht" : h === 1 ? "normal" : h < 2.5 ? "stark" : "sehr stark";
   $("surfaceTxt").textContent = s === 0 ? "egal" : s < 1 ? "leicht" : s === 1 ? "normal" : s < 2.5 ? "stark" : "sehr stark";
 }
-for (const id of ["avoid", "hills", "surface", "profile"]) {
+for (const id of ["avoid", "calm", "hills", "surface", "profile"]) {
   $(id).addEventListener("input", () => { updateLabels(); scheduleRoute(); });
 }
 
@@ -246,8 +259,8 @@ function requestBody(compare) {
   return {
     points: filled().map((p) => ({ lat: p.lat, lon: p.lon })),
     profile: $("profile").value,
-    avoid_roads: +$("avoid").value, hills: +$("hills").value, surface: +$("surface").value,
-    compare,
+    avoid_roads: +$("avoid").value, calm: +$("calm").value, hills: +$("hills").value, surface: +$("surface").value,
+    compare, alternatives: 3,
   };
 }
 async function route() {
@@ -263,15 +276,44 @@ async function route() {
       const e = await r.json().catch(() => ({}));
       throw new Error(e.detail || "Fehler " + r.status);
     }
-    show(await r.json());
+    const d = await r.json();
+    routes = d.routes || [d];
+    selectRoute(d.recommended || 0, true);
     lastRequest = body;
     history.replaceState(null, "", "#r=" + btoa(unescape(encodeURIComponent(JSON.stringify(filled().map((p) => [+p.lat.toFixed(5), +p.lon.toFixed(5)]))))));
   } catch (err) {
-    routeLayer.clearLayers(); baseLayer.clearLayers(); $("stats").style.display = "none";
+    routeLayer.clearLayers(); baseLayer.clearLayers(); altLayer.clearLayers(); $("alts").style.display = "none"; $("stats").style.display = "none";
     $("msg").textContent = err.message; $("msg").style.display = "block";
   } finally { if (my === reqId) document.body.style.cursor = ""; }
 }
-function show(d) {
+function selectRoute(i, fit) {
+  selected = i;
+  renderAlts();
+  altLayer.clearLayers();
+  routes.forEach((r, j) => {
+    if (j === i) return;
+    const l = L.geoJSON(r.segments, { style: { color: "#3b6fd4", weight: 5, opacity: .55, lineCap: "round" } });
+    l.on("click", () => selectRoute(j, false));
+    l.bindTooltip(`${r.label || "Alternative"} – klicken zum Auswählen`, { sticky: true });
+    altLayer.addLayer(l);
+  });
+  show(routes[i], fit);
+}
+function renderAlts() {
+  const box = $("alts");
+  if (routes.length < 2) { box.style.display = "none"; return; }
+  box.style.display = "flex";
+  box.innerHTML = "";
+  routes.forEach((r, i) => {
+    const s = r.stats;
+    const b = document.createElement("button");
+    b.className = "alt" + (i === selected ? " sel" : "");
+    b.innerHTML = `<b>${r.label}</b><span>${fmtKm(s.distance_m)} · Autostraße ${fmtKm(s.road_m)} · Wohnstraße ${fmtKm(s.calm_m)} · ${fmtTime(s.duration_s)}</span>`;
+    b.onclick = () => selectRoute(i, false);
+    box.appendChild(b);
+  });
+}
+function show(d, fit = true) {
   routeLayer.clearLayers(); baseLayer.clearLayers();
   if (d.baseline && +$("avoid").value > 0) {
     L.geoJSON(d.baseline, { style: { color: "#7a7f8a", weight: 4, opacity: .8, dashArray: "6 8" } }).addTo(baseLayer);
@@ -287,7 +329,7 @@ function show(d) {
     },
   });
   routeLayer.addLayer(line);
-  map.fitBounds(line.getBounds(), { padding: [50, 50] });
+  if (fit) map.fitBounds(line.getBounds(), { padding: [50, 50] });
 
   const s = d.stats, tot = s.distance_m || 1;
   $("stats").style.display = "block";
@@ -336,7 +378,7 @@ function drawElevation(pts) {
 }
 $("gpx").onclick = async () => {
   if (!lastRequest) return;
-  const r = await fetch("/api/gpx", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ...lastRequest, compare: false }) });
+  const r = await fetch("/api/gpx", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ...lastRequest, compare: false, pick: selected }) });
   if (!r.ok) return;
   const a = document.createElement("a");
   a.href = URL.createObjectURL(await r.blob()); a.download = "fahrradnavi-route.gpx"; a.click();

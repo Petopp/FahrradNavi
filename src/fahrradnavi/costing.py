@@ -40,7 +40,8 @@ def road_penalty(g: Graph, opts: Options) -> np.ndarray:
     ms = g.e_maxspeed.astype(np.int32)
     lp = np.where((ms > 0) & (ms <= 30), lp * 0.6, lp)  # Tempo 30: deutlich ruhiger
     lp = np.where(ms >= 80, lp * 1.15, lp)  # Landstraße mit Tempo 80/100
-    pen = np.exp(lp * opts.avoid_roads)
+    calm_class = np.isin(g.e_hwc, (T.HW_RESIDENTIAL, T.HW_LIVING_STREET, T.HW_SERVICE))
+    pen = np.exp(lp * opts.avoid_roads * np.where(calm_class, opts.calm, 1.0))
     # "Radweg auf der anderen Seite benutzen"-Schild: Straße noch weniger geeignet
     side = (g.e_flags & T.FLAG_SIDEPATH) != 0
     pen = np.where(side & (pen > 1.0), pen * (3.0 ** opts.avoid_roads), pen)

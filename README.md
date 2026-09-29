@@ -4,7 +4,7 @@ Fahrrad-Routenplaner auf Basis von [OpenStreetMap](https://www.openstreetmap.org
 auch wenn dafür ein Umweg von mehreren Kilometern nötig ist. Reines Python, selbst hostbar, mit Weboberfläche
 und GPX-Export (z. B. für Komoot, Garmin, Wahoo, OsmAnd).
 
-> **Stand:** Prototyp. Kernlogik, API und Weboberfläche sind getestet (39 Tests mit synthetischem Testnetz, Browser-Test)
+> **Stand:** Prototyp. Kernlogik, API und Weboberfläche sind getestet (48 Tests mit synthetischem Testnetz, Browser-Test)
 > und mit echten OSM-Daten des Landkreises Starnberg geprüft. Beispiel *Starnberg → Kloster Andechs* (Trekkingrad):
 > 16,4 km mit 0,3 km Autostraße – die kürzeste Route (14,6 km) hätte 6,1 km auf Autostraßen. Ganz Bayern ist noch nicht
 > gebaut/gemessen, siehe [Skalierung](#skalierung-auf-ganz-bayern).
@@ -25,8 +25,8 @@ Brücke), wird sie trotzdem befahren – und in der Karte **rot** markiert.
 |---|---|
 | Radweg (`highway=cycleway`), Feldweg, Pfad | 0,9 – 1,15 |
 | Fahrradstraße, Straße **mit baulich getrenntem Radweg** (`cycleway=track`) | ≈ 1 (Straße spielt keine Rolle) |
-| Verkehrsberuhigt / Spielstraße / Zufahrt | 1,0 – 1,3 |
-| Wohnstraße | 2,2 (Tempo 30: ≈ 1,6) |
+| Spielstraße / Zufahrt | 1,5 / 2 |
+| Wohnstraße | 8 (Tempo 30: ≈ 3,5) – eigener Regler *Wohnstraßen meiden* |
 | Nebenstraße (`unclassified`) | 10 |
 | Kreisstraße (`tertiary`) | 40 |
 | Staatsstraße (`secondary`) | 100 |
@@ -45,8 +45,26 @@ Weitere Faktoren (alle in `src/fahrradnavi/profiles.py` / `costing.py` anpassbar
 Die Weboberfläche zeigt zum Vergleich immer die **kürzeste Route** (grau gestrichelt) und rechnet vor: *"+4,8 km Umweg,
 dafür 3,8 km weniger Autostraße"*.
 
-**Regler** (Web und API): *Straßen meiden* 0 (egal) … 1 (konsequent) … 2 (extrem), *Steigungen meiden* und *schlechten Belag
-meiden* je 0 … 3. Profile: `trekking`, `road` (Rennrad), `gravel`, `ebike`.
+**Regler** (Web und API): *Straßen meiden* 0 (egal) … 1 (konsequent) … 2 (extrem), *Wohnstraßen meiden* 0 … 3 (zusätzlich, nur
+Wohn-/Spielstraßen und Zufahrten), *Steigungen meiden* und *schlechten Belag meiden* je 0 … 3. Profile: `trekking`, `road` (Rennrad), `gravel`, `ebike`.
+
+## Alternativen und Route erklären
+
+**Alternativen:** Die Weboberfläche (und `"alternatives": 3` in der API) zeigt bis zu vier deutlich verschiedene Routen. Sie werden
+mit dem Penalty-Verfahren gesucht (die Wege der bisherigen Route werden für die Suche ×3 teurer) und nach **Straßenanteil**
+sortiert – Autostraße zählt 4× so viel wie Wohnstraße, die Länge zählt nicht mit (*Straßen meiden hat Vorrang vor Kürze*).
+Beschriftung: „Straßenärmste“, „Kürzeste“, „Alternative n“. Der GPX-Export nimmt die ausgewählte Route.
+
+![Alternativen Starnberg → Kloster Andechs](docs/alternativen-starnberg-andechs.png)
+
+**Eine bekannte Route prüfen:** Warum wählt der Router sie nicht? `fahrradnavi explain` vergleicht die frei gewählte Route mit
+einer Route durch feste Zwischenpunkte und zeigt je Wegabschnitt Straßen-Malus, Belag, Kosten und Aufpreis:
+
+```bash
+fahrradnavi explain --from "48.0012,11.3455" --via "48.0066,11.3477" --via "Hanfeld" --to "Kloster Andechs" --min-length 100
+python scripts/find_streets.py data/graph.npz Leutstettener --osm data/starnberg.osm.pbf   # Straßen suchen, auch ausgeschlossene
+python scripts/render_alternatives.py "Starnberg" "Kloster Andechs" --calm 2 --alts 3      # Bild mit Alternativen
+```
 
 ## Schnellstart (Landkreis Starnberg)
 

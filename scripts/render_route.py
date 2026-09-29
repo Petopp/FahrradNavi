@@ -28,6 +28,24 @@ def tile_xy(lat, lon, z):
     return x, y
 
 
+def basemap(lats, lons, z):
+    """Lädt die OSM-Kacheln, die den Bereich abdecken; gibt (Bild, tx0, ty0, Breite, Höhe) zurück."""
+    x0, y1 = tile_xy(min(lats), min(lons), z)
+    x1, y0 = tile_xy(max(lats), max(lons), z)
+    tx0, tx1, ty0, ty1 = int(x0) - 1, int(x1) + 1, int(y0) - 1, int(y1) + 1
+    W, H = (tx1 - tx0 + 1) * 256, (ty1 - ty0 + 1) * 256
+    img = Image.new("RGB", (W, H), (221, 221, 221))
+    for tx in range(tx0, tx1 + 1):
+        for ty in range(ty0, ty1 + 1):
+            req = urllib.request.Request(f"https://tile.openstreetmap.org/{z}/{tx}/{ty}.png", headers={"User-Agent": UA})
+            try:
+                with urllib.request.urlopen(req, timeout=20) as resp:
+                    img.paste(Image.open(io.BytesIO(resp.read())).convert("RGB"), ((tx - tx0) * 256, (ty - ty0) * 256))
+            except Exception as e:  # Kachel fehlt -> grau lassen
+                print("Kachel fehlt:", tx, ty, e)
+    return img, tx0, ty0, W, H
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("start")
@@ -63,19 +81,7 @@ def main() -> None:
     lats = [c[1] for c in route.coords]
     lons = [c[0] for c in route.coords]
     z = a.zoom
-    x0, y1 = tile_xy(min(lats), min(lons), z)
-    x1, y0 = tile_xy(max(lats), max(lons), z)
-    tx0, tx1, ty0, ty1 = int(x0) - 1, int(x1) + 1, int(y0) - 1, int(y1) + 1
-    W, H = (tx1 - tx0 + 1) * 256, (ty1 - ty0 + 1) * 256
-    img = Image.new("RGB", (W, H), (221, 221, 221))
-    for tx in range(tx0, tx1 + 1):
-        for ty in range(ty0, ty1 + 1):
-            req = urllib.request.Request(f"https://tile.openstreetmap.org/{z}/{tx}/{ty}.png", headers={"User-Agent": UA})
-            try:
-                with urllib.request.urlopen(req, timeout=20) as resp:
-                    img.paste(Image.open(io.BytesIO(resp.read())).convert("RGB"), ((tx - tx0) * 256, (ty - ty0) * 256))
-            except Exception as e:  # Kachel fehlt -> grau lassen
-                print("Kachel fehlt:", tx, ty, e)
+    img, tx0, ty0, W, H = basemap(lats, lons, z)
 
     def px(lon, lat):
         x, y = tile_xy(lat, lon, z)

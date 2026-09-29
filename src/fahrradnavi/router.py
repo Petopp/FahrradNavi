@@ -5,7 +5,7 @@ from __future__ import annotations
 import heapq
 import math
 from collections import OrderedDict
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 import numpy as np
 from scipy.sparse import coo_matrix
@@ -118,16 +118,20 @@ class Router:
         if c is not None:
             self._cache.move_to_end(key)
             return c
-        c = compute_costs(self.g, profile, opts)
-        # Bögen als array('d') für schnellen Zugriff in der Suche
-        from array import array
-
-        arr = array("d")
-        arr.frombytes(c.cost.tobytes())
-        c._arr = arr  # type: ignore[attr-defined]
+        c = self._prepare(compute_costs(self.g, profile, opts))
         self._cache[key] = c
         while len(self._cache) > self._cache_size:
             self._cache.popitem(last=False)
+        return c
+
+    @staticmethod
+    def _prepare(c: Costs) -> Costs:
+        """Bögen zusätzlich als array('d') für schnellen Zugriff in der Suche."""
+        from array import array
+
+        arr = array("d")
+        arr.frombytes(np.ascontiguousarray(c.cost, dtype=np.float64).tobytes())
+        c._arr = arr  # type: ignore[attr-defined]
         return c
 
     # -- Snapping -------------------------------------------------------
@@ -318,6 +322,8 @@ class Router:
             pieces.append(self._piece(b_arc, t, b.vertex, share=1.0 - b.frac))
         else:
             pieces.append(self._piece(b_arc, s, b.vertex, share=b.frac))
+        # Liegt ein Snap-Punkt genau auf einer Kreuzung, entstehen Stücke ohne Länge auf fremden Kanten
+        pieces = [p for p in pieces if len(p.lat) > 1] or pieces[:1]
         return Leg(pieces, total)
 
     # -- Öffentliche API -------------------------------------------------
@@ -327,22 +333,32 @@ class Router:
         profile: str | Profile = "trekking",
         options: Options | None = None,
         compare: bool = False,
+        _search_costs: Costs | None = None,
     ) -> RouteResult:
-        """points: [(lat, lon), ...] – Start, optionale Zwischenziele, Ziel."""
+        """points: [(lat, lon), ...] – Start, optionale Zwischenziele, Ziel.
+
+        ``_search_costs`` (intern): abweichende Kosten nur für die Wegfindung (Alternativen-Suche);
+        Auswertung und ``cost`` des Ergebnisses beruhen weiterhin auf den echten Kosten.
+        """
         if len(points) < 2:
             raise ValueError("Mindestens Start und Ziel angeben.")
         prof = get_profile(profile) if isinstance(profile, str) else profile
         opts = options or Options()
         costs = self.costs(prof, opts)
+        if _search_costs is not None:
+            snaps = [self.snap(la, lo, costs) for la, lo in points]
+            legs = [self._leg(snaps[i], snaps[i + 1], _search_costs) for i in range(len(snaps) - 1)]
+            for leg in legs:  # echte Kosten
+                leg.cost = sum(float(costs.cost[2 * p.edge + int(p.reverse)]) * p.share for p in leg.pieces)
+            res = RouteResult(legs=legs, snaps=snaps, profile=prof, options=opts, cost=sum(l.cost for l in legs))
+            self._summarize(res, costs, points)
+            return res
         snaps = [self.snap(la, lo, costs) for la, lo in points]
         legs = [self._leg(snaps[i], snaps[i + 1], costs) for i in range(len(snaps) - 1)]
         res = RouteResult(legs=legs, snaps=snaps, profile=prof, options=opts, cost=sum(l.cost for l in legs))
         self._summarize(res, costs, points)
         if compare and opts.avoid_roads > 0:
-            base_opts = Options(
-                avoid_roads=0.0, hills=opts.hills, surface=opts.surface,
-                signal_cost=opts.signal_cost, route_bonus=opts.route_bonus,
-            )
+            base_opts = replace(opts, avoid_roads=0.0)
             bcosts = self.costs(prof, base_opts)
             bsnaps = [self.snap(la, lo, bcosts) for la, lo in points]
             blegs = [self._leg(bsnaps[i], bsnaps[i + 1], bcosts) for i in range(len(bsnaps) - 1)]
@@ -358,6 +374,56 @@ class Router:
             res.stats["detour_m"] = res.stats["distance_m"] - bres.stats["distance_m"]
             res.stats["baseline_coords"] = bres.coords
         return res
+
+    def alternatives(
+        self,
+        points: list[tuple[float, float]],
+        profile: str | Profile = "trekking",
+        options: Options | None = None,
+        n: int = 3,
+        penalty: float = 3.0,
+        max_extra: float = 0.8,
+        max_overlap: float = 0.85,
+        best: RouteResult | None = None,
+    ) -> list[RouteResult]:
+        """Sucht bis zu ``n`` deutlich verschiedene Routen (Penalty-Verfahren).
+
+        Nach jeder gefundenen Route werden deren Kanten für die Suche teurer gemacht (``penalty``); die
+        Ergebnisse werden mit den echten Kosten bewertet und verworfen, wenn sie mehr als ``max_extra``
+        (80 %) teurer sind als die beste Route oder sich zu stark überlappen. Die erste ist die beste.
+        """
+        prof = get_profile(profile) if isinstance(profile, str) else profile
+        opts = options or Options()
+        best = best or self.route(points, prof, opts)
+        results = [best]
+        costs = self.costs(prof, opts)
+        used = set(self._edges(best))
+        seen = [set(used)]
+        for _ in range(n + 3):  # ein paar Versuche mehr, weil Kandidaten verworfen werden
+            if len(results) > n:
+                break
+            c = costs.cost.copy()
+            idx = np.fromiter(used, dtype=np.int64)
+            for d in (0, 1):
+                c[2 * idx + d] *= penalty  # inf bleibt inf
+            mod = self._prepare(Costs(cost=c, min_per_meter=costs.min_per_meter, factor=costs.factor, kind=costs.kind))
+            try:
+                cand = self.route(points, prof, opts, _search_costs=mod)
+            except NoRouteError:
+                break
+            edges = set(self._edges(cand))
+            used |= edges
+            if cand.cost > best.cost * (1.0 + max_extra):
+                continue
+            if any(len(edges & o) / max(len(edges), 1) > max_overlap for o in seen):
+                continue
+            seen.append(edges)
+            results.append(cand)
+        return results[: n + 1]
+
+    @staticmethod
+    def _edges(res: RouteResult) -> list[int]:
+        return [p.edge for leg in res.legs for p in leg.pieces if len(p.lat) > 1]
 
     # -- Auswertung -----------------------------------------------------
     def _summarize(self, res: RouteResult, costs: Costs, points) -> None:

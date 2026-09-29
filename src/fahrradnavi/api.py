@@ -34,12 +34,40 @@ class RouteRequest(BaseModel):
     points: list[Point] = Field(min_length=2, max_length=12)
     profile: str = DEFAULT_PROFILE
     avoid_roads: float = Field(1.0, ge=0.0, le=2.0, description="Stärke des Straßen-Meidens (0 = egal, 1 = konsequent)")
+    calm: float = Field(1.0, ge=0.0, le=3.0, description="Wohnstraßen/Zufahrten zusätzlich meiden (0 = egal)")
     hills: float = Field(1.0, ge=0.0, le=3.0)
     surface: float = Field(1.0, ge=0.0, le=3.0)
     compare: bool = True
+    alternatives: int = Field(0, ge=0, le=4, description="Anzahl zusätzlicher Alternativrouten (0 = nur die beste)")
+    pick: int = Field(0, ge=0, le=5, description="Nur GPX: Index der gewünschten Route aus der Alternativenliste")
 
     def options(self) -> Options:
-        return Options(avoid_roads=self.avoid_roads, hills=self.hills, surface=self.surface)
+        return Options(avoid_roads=self.avoid_roads, calm=self.calm, hills=self.hills, surface=self.surface)
+
+
+# Straßenanteil als Rangkriterium: Autostraße wiegt 4x so schwer wie Wohnstraße. Länge zählt nicht mit –
+# "Straßen meiden hat Vorrang vor Kürze".
+ROAD_WEIGHT = 4.0
+
+
+def exposure_m(res: RouteResult) -> float:
+    return ROAD_WEIGHT * res.stats["road_m"] + res.stats["calm_m"]
+
+
+def label_routes(results: list[RouteResult]) -> list[str]:
+    best = min(range(len(results)), key=lambda i: (exposure_m(results[i]), results[i].stats["distance_m"]))
+    short = min(range(len(results)), key=lambda i: results[i].stats["distance_m"])
+    labels = []
+    for i in range(len(results)):
+        if i == best and i == short:
+            labels.append("Straßenärmste & kürzeste")
+        elif i == best:
+            labels.append("Straßenärmste")
+        elif i == short:
+            labels.append("Kürzeste")
+        else:
+            labels.append(f"Alternative {i + 1}")
+    return labels
 
 
 def _route_payload(res: RouteResult) -> dict:
@@ -98,22 +126,43 @@ def create_app(graph: Graph | None = None, graph_path: str | None = None) -> Fas
         near = (lat, lon) if lat is not None and lon is not None else None
         return geocoder.search(q, near=near)
 
-    def _compute(req: RouteRequest) -> RouteResult:
+    def _compute_all(req: RouteRequest) -> list[RouteResult]:
+        """Beste Route (Index 0) plus ggf. Alternativen."""
         if req.profile not in PROFILES:
             raise HTTPException(400, f"Unbekanntes Profil {req.profile!r}")
+        pts = [(p.lat, p.lon) for p in req.points]
         try:
-            return router.route([(p.lat, p.lon) for p in req.points], req.profile, req.options(), compare=req.compare)
+            best = router.route(pts, req.profile, req.options(), compare=req.compare)
+            if req.alternatives <= 0:
+                return [best]
+            return router.alternatives(pts, req.profile, req.options(), n=req.alternatives, best=best)
         except NoRouteError as e:
             raise HTTPException(422, str(e)) from e
 
     @app.post("/api/route")
     def route(req: RouteRequest) -> dict:
-        return _route_payload(_compute(req))
+        results = _compute_all(req)
+        payloads = [_route_payload(r) for r in results]
+        base = results[0].stats.get("baseline")
+        for r, pl in zip(results, payloads):
+            if base:
+                pl["stats"]["baseline"] = base
+                pl["stats"]["detour_m"] = r.stats["distance_m"] - base["distance_m"]
+                pl["baseline"] = payloads[0].get("baseline")
+        if len(results) == 1:
+            return payloads[0]
+        labels = label_routes(results)
+        rec = min(range(len(results)), key=lambda i: (exposure_m(results[i]), results[i].stats["distance_m"]))
+        for i, pl in enumerate(payloads):
+            pl["label"] = labels[i]
+            pl["exposure_m"] = round(exposure_m(results[i]), 1)
+        return {**payloads[rec], "routes": payloads, "recommended": rec}
 
     @app.post("/api/gpx")
     def gpx(req: RouteRequest) -> Response:
         req.compare = False
-        res = _compute(req)
+        results = _compute_all(req)
+        res = results[min(req.pick, len(results) - 1)]
         p0, p1 = res.snaps[0], res.snaps[-1]
         wpts = [(p0.lat, p0.lon, "Start"), (p1.lat, p1.lon, "Ziel")]
         name = f"FahrradNavi {PROFILES[req.profile].label} {res.stats['distance_m'] / 1000:.1f} km"
