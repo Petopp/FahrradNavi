@@ -15,6 +15,7 @@ from scipy.spatial import cKDTree
 from . import tags as T
 from .costing import INF, KIND_CALM, KIND_OWN, KIND_ROAD, Costs, compute_costs
 from .graph import E7, Graph
+from .overlays import Overlays, SegmentIndex, edge_multipliers
 from .profiles import Options, Profile, get_profile
 
 KIND_LABELS = {KIND_OWN: "own", KIND_CALM: "calm", KIND_ROAD: "road"}
@@ -84,6 +85,7 @@ class RouteResult:
     coords: list[list[float]] = field(default_factory=list)  # [lon, lat, ele]
     segments: list[dict] = field(default_factory=list)
     profile_points: list[list[float]] = field(default_factory=list)  # [km, ele]
+    leg_ends: list[int] = field(default_factory=list)  # Index in coords, an dem jede Teilstrecke (Leg) endet
 
 
 class Router:
@@ -100,6 +102,8 @@ class Router:
         pts = np.column_stack([(graph.v_lon[sv] / E7) * self._kx, (graph.v_lat[sv] / E7) * self._ky])
         self._tree = cKDTree(pts)
         self._edge_main = self._main_component_mask()
+        self._seg_index: SegmentIndex | None = None
+        self._overlay_cache: OrderedDict[tuple, Costs] = OrderedDict()
 
     def _main_component_mask(self) -> np.ndarray:
         """Kanten in großen zusammenhängenden Netzen (kleine Inseln wie private Zufahrten sind schlechte Snap-Ziele)."""
@@ -123,6 +127,34 @@ class Router:
         while len(self._cache) > self._cache_size:
             self._cache.popitem(last=False)
         return c
+
+    def _segment_index(self) -> SegmentIndex:
+        if self._seg_index is None:
+            self._seg_index = SegmentIndex(self.g)
+        return self._seg_index
+
+    def effective_costs(self, profile: Profile, opts: Options, overlays: Overlays | None = None) -> Costs:
+        """Profilkosten plus Nutzer-Overlays (gemiedene Bereiche, Lieblingswege); Ergebnis wird kurz zwischengespeichert."""
+        base = self.costs(profile, opts)
+        if overlays is None or overlays.empty():
+            return base
+        key = (profile.name, opts.key(), overlays)
+        hit = self._overlay_cache.get(key)
+        if hit is not None:
+            self._overlay_cache.move_to_end(key)
+            return hit
+        m = edge_multipliers(self._segment_index(), overlays)
+        c = base.cost.copy()
+        c[0::2] *= m
+        c[1::2] *= m
+        eff = self._prepare(Costs(
+            cost=c, min_per_meter=base.min_per_meter * min(1.0, float(m.min())),
+            factor=(base.factor * m).astype(np.float32), kind=base.kind,
+        ))
+        self._overlay_cache[key] = eff
+        while len(self._overlay_cache) > 4:
+            self._overlay_cache.popitem(last=False)
+        return eff
 
     @staticmethod
     def _prepare(c: Costs) -> Costs:
@@ -333,6 +365,7 @@ class Router:
         profile: str | Profile = "trekking",
         options: Options | None = None,
         compare: bool = False,
+        overlays: Overlays | None = None,
         _search_costs: Costs | None = None,
     ) -> RouteResult:
         """points: [(lat, lon), ...] – Start, optionale Zwischenziele, Ziel.
@@ -344,7 +377,7 @@ class Router:
             raise ValueError("Mindestens Start und Ziel angeben.")
         prof = get_profile(profile) if isinstance(profile, str) else profile
         opts = options or Options()
-        costs = self.costs(prof, opts)
+        costs = self.effective_costs(prof, opts, overlays)
         if _search_costs is not None:
             snaps = [self.snap(la, lo, costs) for la, lo in points]
             legs = [self._leg(snaps[i], snaps[i + 1], _search_costs) for i in range(len(snaps) - 1)]
@@ -385,6 +418,7 @@ class Router:
         max_extra: float = 0.8,
         max_overlap: float = 0.85,
         best: RouteResult | None = None,
+        overlays: Overlays | None = None,
     ) -> list[RouteResult]:
         """Sucht bis zu ``n`` deutlich verschiedene Routen (Penalty-Verfahren).
 
@@ -394,9 +428,9 @@ class Router:
         """
         prof = get_profile(profile) if isinstance(profile, str) else profile
         opts = options or Options()
-        best = best or self.route(points, prof, opts)
+        best = best or self.route(points, prof, opts, overlays=overlays)
         results = [best]
-        costs = self.costs(prof, opts)
+        costs = self.effective_costs(prof, opts, overlays)
         used = set(self._edges(best))
         seen = [set(used)]
         for _ in range(n + 3):  # ein paar Versuche mehr, weil Kandidaten verworfen werden
@@ -408,7 +442,7 @@ class Router:
                 c[2 * idx + d] *= penalty  # inf bleibt inf
             mod = self._prepare(Costs(cost=c, min_per_meter=costs.min_per_meter, factor=costs.factor, kind=costs.kind))
             try:
-                cand = self.route(points, prof, opts, _search_costs=mod)
+                cand = self.route(points, prof, opts, overlays=overlays, _search_costs=mod)
             except NoRouteError:
                 break
             edges = set(self._edges(cand))
@@ -442,7 +476,10 @@ class Router:
         surf_f = np.array(prof.surface_factor)
 
         cur: dict | None = None
+        leg_ends: list[int] = []
         for li, leg in enumerate(res.legs):
+            if li:
+                leg_ends.append(len(coords) - 1)
             for p in leg.pieces:
                 e = p.edge
                 length = polyline_length_m(p.lat, p.lon)
@@ -484,11 +521,13 @@ class Router:
                         continue
                     coords.append([float(lo), float(la), float(el) if np.isfinite(el) else None])  # type: ignore[list-item]
 
+        leg_ends.append(len(coords) - 1)
         # Anfahrt: gewünschter Start-/Zielpunkt liegt meist neben dem Weg -> gerade Verbindung in die Geometrie
         if coords and points:
             (la0, lo0), (la1, lo1) = points[0], points[-1]
             if res.snaps[0].distance_m > 3.0:
                 coords.insert(0, [float(lo0), float(la0), coords[0][2]])
+                leg_ends = [x + 1 for x in leg_ends]
             if res.snaps[-1].distance_m > 3.0:
                 coords.append([float(lo1), float(la1), coords[-1][2]])
 
@@ -510,6 +549,7 @@ class Router:
             s["length_m"] = round(s["length_m"], 1)
 
         res.coords = coords
+        res.leg_ends = leg_ends
         res.segments = segments
         res.profile_points = prof_pts
         res.stats = {

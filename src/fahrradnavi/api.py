@@ -7,20 +7,22 @@ import os
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Query, Response
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from . import __version__, auth as authmod
 from .geocoder import Geocoder
 from .gpx import route_to_gpx
 from .graph import Graph
+from . import overlays as ov
 from .profiles import DEFAULT_PROFILE, PROFILES, Options
 from .router import NoRouteError, Router, RouteResult
 
 log = logging.getLogger(__name__)
 WEB_DIR = Path(__file__).parent / "web"
 
+MAX_BODY_BYTES = 3_000_000
 DEFAULT_TILES = "https://tile.openstreetmap.org/{z}/{x}/{y}.png"
 DEFAULT_ATTRIBUTION = '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>-Mitwirkende'
 
@@ -30,8 +32,31 @@ class Point(BaseModel):
     lon: float = Field(ge=-180, le=180)
 
 
+class AreaIn(BaseModel):
+    """Gemiedener Bereich: Kreis (lat/lon/radius_m) oder Polygon (points)."""
+
+    kind: str = Field(pattern="^(circle|polygon)$")
+    strength: float = Field(1.0, ge=0.0, le=1.0)
+    lat: float = Field(0.0, ge=-90, le=90)
+    lon: float = Field(0.0, ge=-180, le=180)
+    radius_m: float = Field(0.0, ge=0.0, le=ov.MAX_RADIUS_M)
+    points: list[Point] = Field(default_factory=list, max_length=ov.MAX_POLYGON_POINTS)
+
+
+class FavoriteIn(BaseModel):
+    """Lieblingsweg: Linie, z. B. aus einer GPX-Datei."""
+
+    coords: list[Point] = Field(min_length=2, max_length=ov.MAX_FAVORITE_POINTS)
+    strength: float = Field(1.0, ge=0.0, le=1.0)
+
+
+class RoundtripIn(BaseModel):
+    distance_km: float = Field(ge=2.0, le=300.0, description="Gewünschte Länge der Rundreise")
+    heading: float | None = Field(None, ge=0.0, lt=360.0, description="Bevorzugte Richtung (0 = Nord, 90 = Ost); leer = beliebig")
+
+
 class RouteRequest(BaseModel):
-    points: list[Point] = Field(min_length=2, max_length=12)
+    points: list[Point] = Field(min_length=1, max_length=14)
     profile: str = DEFAULT_PROFILE
     avoid_roads: float = Field(1.0, ge=0.0, le=2.0, description="Stärke des Straßen-Meidens (0 = egal, 1 = konsequent)")
     calm: float = Field(1.0, ge=0.0, le=3.0, description="Wohnstraßen/Zufahrten zusätzlich meiden (0 = egal)")
@@ -42,6 +67,24 @@ class RouteRequest(BaseModel):
     compare: bool = True
     alternatives: int = Field(0, ge=0, le=4, description="Anzahl zusätzlicher Alternativrouten (0 = nur die beste)")
     pick: int = Field(0, ge=0, le=5, description="Nur GPX: Index der gewünschten Route aus der Alternativenliste")
+    avoid_areas: list[AreaIn] = Field(default_factory=list, max_length=ov.MAX_AREAS)
+    favorites: list[FavoriteIn] = Field(default_factory=list, max_length=ov.MAX_FAVORITES)
+    loop: bool = Field(False, description="Zurück zum Start: der erste Punkt wird als Ziel angehängt")
+    roundtrip: RoundtripIn | None = Field(None, description="Rundreise ab dem ersten Punkt mit gewünschter Länge")
+
+    @model_validator(mode="after")
+    def _check(self) -> "RouteRequest":
+        if self.roundtrip is None and len(self.points) < 2:
+            raise ValueError("Mindestens Start und Ziel angeben (oder eine Rundreise mit Länge).")
+        self.overlays()  # Grenzen prüfen (Radius, Polygonpunkte, Punktezahl)
+        return self
+
+    def overlays(self) -> ov.Overlays:
+        areas = []
+        for a in self.avoid_areas:
+            areas.append(ov.AvoidArea(a.kind, a.strength, a.lat, a.lon, a.radius_m, tuple((p.lat, p.lon) for p in a.points)))
+        favs = [ov.Favorite(tuple((p.lat, p.lon) for p in f.coords), f.strength) for f in self.favorites]
+        return ov.Overlays(tuple(areas), tuple(favs))
 
     def options(self) -> Options:
         return Options(avoid_roads=self.avoid_roads, calm=self.calm, urban=self.urban, center=self.center, hills=self.hills, surface=self.surface)
@@ -97,6 +140,7 @@ def _route_payload(res: RouteResult) -> dict:
         "coordinates": res.coords,
         "segments": {"type": "FeatureCollection", "features": features},
         "elevation": res.profile_points,
+        "leg_ends": res.leg_ends,
         "snapped": [{"lat": s.lat, "lon": s.lon} for s in res.snaps],
     }
     if baseline_coords is not None:
@@ -131,6 +175,13 @@ def create_app(
     attribution = os.environ.get("FAHRRADNAVI_TILE_ATTRIBUTION") or DEFAULT_ATTRIBUTION
     authmod.install(app, auth, tiles)
 
+    @app.middleware("http")
+    async def limit_body(request, call_next):
+        # Schutz vor riesigen Eingaben (Lieblingswege aus GPX sind die größten Anfragen)
+        if request.method == "POST" and int(request.headers.get("content-length") or 0) > MAX_BODY_BYTES:
+            return JSONResponse({"detail": "Anfrage zu groß"}, status_code=413)
+        return await call_next(request)
+
     @app.get("/api/config")
     def config() -> dict:
         min_lon, min_lat, max_lon, max_lat = graph.bbox()
@@ -156,11 +207,14 @@ def create_app(
         if req.profile not in PROFILES:
             raise HTTPException(400, f"Unbekanntes Profil {req.profile!r}")
         pts = [(p.lat, p.lon) for p in req.points]
+        if req.loop and len(pts) >= 2:
+            pts = pts + [pts[0]]
+        overlays = req.overlays()
         try:
-            best = router.route(pts, req.profile, req.options(), compare=req.compare)
+            best = router.route(pts, req.profile, req.options(), compare=req.compare, overlays=overlays)
             if req.alternatives <= 0:
                 return [best]
-            return router.alternatives(pts, req.profile, req.options(), n=req.alternatives, best=best)
+            return router.alternatives(pts, req.profile, req.options(), n=req.alternatives, best=best, overlays=overlays)
         except NoRouteError as e:
             raise HTTPException(422, str(e)) from e
 
