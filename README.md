@@ -4,7 +4,7 @@ Fahrrad-Routenplaner auf Basis von [OpenStreetMap](https://www.openstreetmap.org
 auch wenn dafür ein Umweg von mehreren Kilometern nötig ist. Reines Python, selbst hostbar, mit Weboberfläche
 und GPX-Export (z. B. für Komoot, Garmin, Wahoo, OsmAnd).
 
-> **Stand:** Prototyp. Kernlogik, API und Weboberfläche sind getestet (128 Tests mit synthetischem Testnetz, dazu ein Browser-Rauchtest, Browser-Test)
+> **Stand:** Prototyp. Kernlogik, API und Weboberfläche sind getestet (133 Tests mit synthetischem Testnetz, dazu ein Browser-Rauchtest, Browser-Test)
 > und mit echten OSM-Daten des Landkreises Starnberg geprüft. Beispiel *Starnberg → Kloster Andechs* (Trekkingrad):
 > 16,4 km mit 0,3 km Autostraße – die kürzeste Route (14,6 km) hätte 6,1 km auf Autostraßen. Ganz Bayern ist noch nicht
 > gebaut/gemessen, siehe [Skalierung](#skalierung-auf-ganz-bayern).
@@ -55,6 +55,8 @@ Alles in der Weboberfläche, ohne Neuberechnen von Hand:
 * **Route per Markierung ändern:** Mit der Maus über die Route fahren – ein Zieh-Marker erscheint; **Ziehen** fügt ein Zwischenziel
   ein (wie bei Komoot). **Klick auf die Route** öffnet ein Menü: *Zwischenziel hier einfügen* oder *Diese Stelle meiden*
   (Kreis von 60 m). Zwischenziel-Marker sind verschiebbar, mit dem × in der Liste löschbar.
+* **Zwischenziele eintippen:** *+ Zwischenziel* fügt vor dem Ziel ein leeres Feld ein (mit Cursor darin); es wird per Ortssuche
+  oder per Klick auf die Karte gefüllt. Leere Felder lassen sich mit × wieder entfernen.
 * **Zurück zum Start:** Haken *Rundkurs über die Zwischenziele* hängt den Start als Ziel an.
 * **Bereiche zum Meiden:** *◯ Kreis meiden* (Mittelpunkt klicken, dann Radius) oder *⬠ Fläche meiden* (Ecken klicken, Doppelklick
   schließt). Wege darin werden bis zu ×50 teurer – **weich**: betreten wird der Bereich nur, wenn es keinen zumutbaren Umweg gibt
@@ -65,7 +67,10 @@ Alles in der Weboberfläche, ohne Neuberechnen von Hand:
   (localStorage, pro Gerät) und wirken auf Routen, Alternativen und Rundreisen.
 * **Rundreisen:** Reiter *Rundreise* – Start setzen, Länge (5–150 km) und Richtung wählen, *Rundreise berechnen*. Der Router legt
   Zwischenpunkte auf einem Kreis um den Start, skaliert ihn auf die Wunschlänge, verteuert bereits benutzte Wege für die Rückfahrt
-  (kein Hin-und-zurück) und zeigt bis zu 3 unterschiedliche Schleifen (Länge, Überlappung, Straßenanteil werden bewertet). Alle
+  (kein Hin-und-zurück), entfernt **Stichwege** (zu einem Zwischenpunkt hin und auf demselben Weg zurück) und lässt Zwischenpunkte
+  weg, zu denen die Route als **Spitze** hin und auf einem Parallelweg zurück fahren würde. Zwischenpunkte im See oder außerhalb der
+  Karte werden Richtung Start verschoben; ist die Wunschlänge nicht erreichbar, kommt die nächstbeste Schleife mit Hinweis. Angezeigt
+  werden bis zu 3 unterschiedliche Schleifen (Länge, Überlappung, Straßenanteil werden bewertet). Alle
   Regler, Bereiche und Lieblingswege gelten auch hier; GPX-Export wie gewohnt.
 
 API: `avoid_areas` (Kreis `{kind:"circle",lat,lon,radius_m,strength}` / Polygon `{kind:"polygon",points:[…]}`), `favorites`
@@ -80,7 +85,7 @@ Grenzen: 20 Bereiche, 300 Polygonpunkte, Radius ≤ 50 km, 10 Lieblingswege mit 
 
 *Drei Rundreisen ab der Leutstettener Straße (Wunsch 35 km): 34,3 / 33,8 / 39,0 km, Richtungen 300° / 60° / 0°.*
 
-Browser-Rauchtest der Bedienung (Playwright): `python scripts/ui_smoke.py` (29 Prüfungen auf Testnetzen).
+Browser-Rauchtest der Bedienung (Playwright): `python scripts/ui_smoke.py` (35 Prüfungen auf Testnetzen).
 
 ## Innenstadt meiden
 

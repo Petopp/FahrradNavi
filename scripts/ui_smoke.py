@@ -46,6 +46,7 @@ def make_graph(builder_fn, tmp: str, name: str):
 def kurz_lang(b: OsmBuilder) -> None:
     b.way([(0, 0), (3000, 0)], {**CYCLE, "name": "Kurz"}, step=100)
     b.way([(0, 0), (0, 400), (3000, 400), (3000, 0)], {**CYCLE, "name": "Lang"}, step=100)
+    b.node(2200, 430, {"place": "hamlet", "name": "Weiler"})  # für die Ortssuche
 
 
 def grid(b: OsmBuilder) -> None:
@@ -162,6 +163,28 @@ async def main() -> int:
         n_pts = await page.locator("#points .pt").count()
         check("Ziehen fügt ein Zwischenziel ein (3 Punkte) und ändert die Route", n_pts == 3 and d > 3.5, f"{n_pts} Punkte, {d} km")
 
+        # Leeres Zwischenziel-Feld: "+ Zwischenziel" fügt ein leeres Feld vor dem Ziel ein
+        await page.click("#reset")
+        await click_ll((0, 0)); await click_ll((3000, 0)); await dist()
+        await page.click("#addVia")
+        vals = await page.locator("#points input").evaluate_all("e => e.map(x => x.value)")
+        focused = await page.evaluate("document.activeElement === document.querySelectorAll('#points input')[1]")
+        check("„+ Zwischenziel“ fügt ein leeres Feld zwischen Start und Ziel ein (und setzt den Cursor hinein)",
+              len(vals) == 3 and vals[1] == "" and vals[0] != "" and vals[2] != "" and focused, str(vals))
+        await click_ll((1500, 330)); await settle(); d = await dist()  # neben der Alternativ-Linie (Klick darauf würde sie auswählen)
+        vals = await page.locator("#points input").evaluate_all("e => e.map(x => x.value)")
+        check("Klick auf die Karte füllt das leere Zwischenziel (Ziel bleibt Ziel)", len(vals) == 3 and vals[1] != "" and abs(d - 3.8) < 0.15, f"{d} km {vals}")
+        await page.click("#addVia")
+        await page.locator("#points input").nth(2).fill("Weiler")
+        await page.wait_for_selector(".suggest div", timeout=5000)
+        await page.locator(".suggest div").first.click(); await settle()
+        vals = await page.locator("#points input").evaluate_all("e => e.map(x => x.value)")
+        check("Suche füllt das leere Zwischenziel", len(vals) == 4 and vals[2] == "Weiler", str(vals))
+        await page.click("#addVia")
+        n_before = await page.locator("#points .pt").count()
+        await page.locator("#points .pt").nth(n_before - 2).locator("button.x").click()
+        check("Leeres Zwischenziel lässt sich wieder entfernen", await page.locator("#points .pt").count() == n_before - 1)
+
         # Stelle meiden per Popup
         await page.click("#reset")
         await click_ll((0, 0)); await click_ll((3000, 0)); await dist()
@@ -214,6 +237,15 @@ async def main() -> int:
         cards = await page.locator("#alts .alt").all_inner_texts()
         check("Mehrere Rundreise-Varianten", len(cards) >= 2 and cards[0].startswith("Rundreise 1"), f"{len(cards)}")
         check("Hinweis zur Überlappung", "Rundreise" in await page.inner_text("#detour"))
+        loop_coords = await page.evaluate("routes[selected].coordinates.map(c => [c[0].toFixed(7), c[1].toFixed(7)].join())")
+        uturns = sum(1 for i in range(1, len(loop_coords) - 1) if loop_coords[i - 1] == loop_coords[i + 1])
+        check("Rundreise ohne Hin-und-zurück-Stichwege", uturns == 0, f"{uturns} Kehrtwenden")
+        pt = await page.evaluate("routes[selected].coordinates[Math.floor(routes[selected].coordinates.length / 3)]")
+        pos = await page.evaluate("([la,lo]) => { const p = map.latLngToContainerPoint([la,lo]); const r = document.getElementById('map').getBoundingClientRect(); return [p.x + r.left, p.y + r.top]; }", [pt[1], pt[0]])
+        await page.mouse.click(pos[0], pos[1]); await page.wait_for_timeout(400)
+        btns = await page.locator(".popbtn").all_inner_texts()
+        check("Menü auf der Rundreise bietet nur „Stelle meiden“", len(btns) == 1 and "meiden" in btns[0], str(btns))
+        await page.keyboard.press("Escape"); await page.evaluate("map.closePopup()")
         await page.select_option("#tripHeading", "0"); await settle(); await dist()
         check("Richtung Nord neu berechnet", True)
         async with page.expect_download() as dl:

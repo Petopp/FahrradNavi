@@ -144,3 +144,87 @@ def test_api_roundtrip_validation(client):
     assert client.post("/api/route", json={"points": [], "roundtrip": {"distance_km": 12}}).status_code == 422
     assert client.post("/api/route", json={"points": [{"lat": 10.0, "lon": 10.0}], "roundtrip": {"distance_km": 12}}).status_code == 422
     assert client.post("/api/route", json={"points": [{"lat": CENTER[0], "lon": CENTER[1]}]}).status_code == 422  # ohne Rundreise/Ziel
+
+
+# --- Stichwege (Hin und zurück zu einem Zwischenpunkt) ------------------------------------------------
+
+
+def uturns(coords):
+    c = [(round(x[0], 7), round(x[1], 7)) for x in coords]
+    return sum(1 for i in range(1, len(c) - 1) if c[i - 1] == c[i + 1])
+
+
+@pytest.fixture(scope="module")
+def grid_with_spurs(tmp_path_factory):
+    """Gitter wie oben, zusätzlich an jedem Knoten ein 200-m-Sackgassen-Stich nach Nordosten (typische Stichwege)."""
+    d = tmp_path_factory.mktemp("spurs")
+    b = OsmBuilder()
+    for i in range(N):
+        b.way([(0, i * STEP), ((N - 1) * STEP, i * STEP)], CYCLE, step=STEP)
+        b.way([(i * STEP, 0), (i * STEP, (N - 1) * STEP)], CYCLE, step=STEP)
+    for i in range(N):
+        for j in range(N):
+            b.way([(i * STEP, j * STEP), (i * STEP + 140, j * STEP + 140)], {"highway": "track", "name": "Stich"}, step=50)
+    b.write(str(d / "s.osm"))
+    return build_graph(read_osm(str(d / "s.osm")))
+
+
+def test_remove_spurs_cuts_out_and_back(grid_with_spurs):
+    """Route mit Zwischenpunkt am Ende eines Stichs: danach keine Kehrtwende mehr, Länge um 2x Stich kürzer."""
+    r = Router(grid_with_spurs)
+    via = to_ll(5000 + 140, 5000 + 140)  # Ende eines Stichs
+    res = r.route([to_ll(4000, 5000), via, to_ll(6000, 5000)], "trekking", Options())
+    assert uturns(res.coords) >= 1
+    leg, overlap = r._remove_spurs(res.legs, r.costs(res.profile, res.options))
+    from fahrradnavi.router import RouteResult
+
+    clean = RouteResult(legs=[leg], snaps=res.snaps, profile=res.profile, options=res.options, cost=leg.cost)
+    r._summarize(clean, r.costs(res.profile, res.options), [to_ll(4000, 5000), to_ll(6000, 5000)])
+    assert uturns(clean.coords) == 0
+    assert res.stats["distance_m"] - clean.stats["distance_m"] == pytest.approx(2 * 198, abs=15)
+    assert clean.cost < res.cost and overlap == 0
+
+
+def test_round_trips_have_no_out_and_back_spurs(grid_with_spurs):
+    r = Router(grid_with_spurs)
+    for km in (8, 12, 16):
+        for c in r.round_trips(CENTER, km * 1000, "trekking", Options(), n=3):
+            assert uturns(c.coords) == 0
+            assert c.coords[0][:2] == pytest.approx(c.coords[-1][:2], abs=1e-6)
+            assert len(c.legs) == 1
+
+
+def test_waypoints_outside_data_are_pulled_in(grid):
+    """Wunschlänge größer als das Gebiet: Zwischenpunkte außerhalb werden Richtung Start gezogen statt Fehler."""
+    r = Router(grid)
+    loops = r.round_trips(to_ll(1000, 1000), 30_000, "trekking", Options(), n=2)  # Start in der Ecke
+    assert loops and all(c.coords[0][:2] == pytest.approx(c.coords[-1][:2], abs=1e-6) for c in loops)
+    assert loops[0].stats["distance_m"] > 5000
+
+
+def test_spike_metric():
+    from fahrradnavi.router import spike_total_m
+
+    lat0, lon0 = 48.0, 11.0
+    m_lat, m_lon = 1 / 110_574.0, 1 / (111_320.0 * math.cos(math.radians(48.0)))
+    # Quadrat 1 km: keine Spitze
+    sq = [(0, 0), (1000, 0), (1000, 1000), (0, 1000), (0, 0)]
+    assert spike_total_m([[lon0 + x * m_lon, lat0 + y * m_lat] for x, y in sq]) == 0
+    # 800 m hinauf und auf einem Parallelweg 60 m daneben zurück, dann weiter: eine Spitze von ~800 m
+    spike = [(0, 0), (1000, 0), (1000, 800), (1060, 800), (1060, 0), (2000, 0), (2000, -1000), (0, -1000), (0, 0)]
+    v = spike_total_m([[lon0 + x * m_lon, lat0 + y * m_lat] for x, y in spike])
+    assert 650 <= v <= 900
+
+
+def test_spike_length_detects_parallel_return(tmp_path):
+    """Hin auf einem Weg, 60 m daneben auf einem Parallelweg zurück: als Spitze erkannt; eine echte Schleife nicht."""
+    b = OsmBuilder()
+    b.way([(0, 0), (2000, 0), (2060, 0), (4000, 0)], CYCLE, step=100)
+    b.way([(2000, 0), (2000, 1500), (2030, 1500), (2060, 1500), (2060, 0)], CYCLE, step=100)  # Stich mit Parallelweg
+    b.way([(0, 0), (0, -2000), (4000, -2000), (4000, 0)], CYCLE, step=200)  # große Schleife südlich
+    b.write(str(tmp_path / "p.osm"))
+    r = Router(build_graph(read_osm(str(tmp_path / "p.osm"))))
+    spiky = r.route([to_ll(0, 0), to_ll(2030, 1500), to_ll(4000, 0)], "trekking", Options())
+    assert r._spike_length(spiky.legs[0], spiky.legs[1]) >= 1400
+    loop = r.route([to_ll(0, 0), to_ll(2000, -2000), to_ll(4000, 0)], "trekking", Options())
+    assert r._spike_length(loop.legs[0], loop.legs[1]) < 400

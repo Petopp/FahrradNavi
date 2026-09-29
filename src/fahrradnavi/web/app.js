@@ -19,6 +19,7 @@ let timer = null, reqId = 0, lastRequest = null;
 let routes = [], selected = 0;
 let curCoords = [], curLegEnds = [];
 let areas = [], favs = [];    // Nutzer-Overlays (im Browser gespeichert)
+let activeSlot = -1;          // zuletzt angeklicktes leeres Eingabefeld (wird per Karte/Suche gefüllt)
 let ghost = null, ghostLeg = 0, ghostIdx = 0, ghostTimer = null, dragging = false;
 
 const fmtKm = (m) => (m / 1000).toLocaleString("de-DE", { maximumFractionDigits: 1, minimumFractionDigits: 1 }) + " km";
@@ -95,13 +96,26 @@ function addPoint(lat, lon, label) {
   const p = { lat, lon, label: label || `${lat.toFixed(5)}, ${lon.toFixed(5)}` };
   if (tab === "trip") { points = [p]; renderPoints(); if (tripArmed) scheduleRoute(); return; }
   const slots = Math.max(2, points.length);
-  let i = -1;
-  for (let k = 0; k < slots; k++) if (!points[k]) { i = k; break; }
-  if (i < 0) { if (points.length >= 12) return; i = points.length; }
+  let i = activeSlot >= 0 && activeSlot < slots && !points[activeSlot] ? activeSlot : -1;
+  for (let k = 0; i < 0 && k < slots; k++) if (!points[k]) i = k;
+  if (i < 0) { if (points.length >= 12) { toast("Höchstens 12 Punkte."); return; } i = points.length; }
   points[i] = p;
+  activeSlot = -1;
   renderPoints(); scheduleRoute();
 }
+// Leeres Zwischenziel-Feld vor dem Ziel einfügen; es wird per Suche oder Klick auf die Karte gefüllt
+function addViaSlot() {
+  while (points.length < 2) points.push(null);
+  if (points.length >= 12) { toast("Höchstens 12 Punkte."); return; }
+  const pos = points.length - 1;
+  points.splice(pos, 0, null);
+  activeSlot = pos;
+  renderPoints();
+  const input = $("points").querySelectorAll("input")[pos];
+  if (input) input.focus();
+}
 function removePoint(i) {
+  activeSlot = -1;
   if (tab === "trip" || Math.max(2, points.length) <= 2) points[i] = null; else points.splice(i, 1);
   while (points.length && !points[points.length - 1] && points.length > 2) points.pop();
   renderPoints(); scheduleRoute();
@@ -113,16 +127,21 @@ function renderPoints() {
   const slots = tab === "trip" ? 1 : Math.max(2, points.length);
   for (let i = 0; i < slots; i++) {
     const p = points[i];
-    const isStart = i === 0, isEnd = i === slots - 1 && tab !== "trip";
+    const isStart = i === 0, isEnd = i === slots - 1 && tab !== "trip", isVia = !isStart && !isEnd;
     const color = isStart ? "#1f9d55" : isEnd ? "#d63c3c" : "#3b6fd4";
     const tag = isStart ? "A" : isEnd ? "B" : String(i);
     const row = document.createElement("div");
     row.className = "pt row"; row.style.marginBottom = "6px";
     row.innerHTML = `<span class="dot" style="background:${color}">${tag}</span>
       <input type="text" placeholder="${isStart ? "Start" : isEnd ? "Ziel" : "Zwischenziel"} suchen …" autocomplete="off">
-      ${p ? '<button class="x" title="Entfernen">×</button>' : ""}`;
+      ${p || isVia ? '<button class="x" title="Entfernen">×</button>' : ""}`;
     const input = row.querySelector("input");
     input.value = p ? p.label : "";
+    input.addEventListener("focus", () => {
+      activeSlot = points[i] ? -1 : i;
+      $("points").querySelectorAll(".pt").forEach((r, k) => r.classList.toggle("active", k === activeSlot));
+    });
+    if (!p && i === activeSlot) row.classList.add("active");
     setupSearch(row, input, i);
     const x = row.querySelector(".x");
     if (x) x.onclick = () => removePoint(i);
@@ -134,7 +153,9 @@ function renderPoints() {
       markers.push(m);
     }
   }
-  $("clickhint").style.display = (tab === "trip" ? n >= 1 : n >= 2) ? "none" : "block";
+  const emptyVia = tab === "route" && points.some((q, k) => !q && k > 0 && k < slots - 1);
+  if (emptyVia) $("clickhint").textContent = "Leeres Zwischenziel: oben einen Ort suchen oder auf die Karte klicken.";
+  $("clickhint").style.display = (tab === "trip" ? n >= 1 : n >= 2 && !emptyVia) ? "none" : "block";
 }
 function setupSearch(row, input, i) {
   let t = null, box = null;
@@ -167,7 +188,7 @@ function setupSearch(row, input, i) {
   });
   input.addEventListener("blur", () => setTimeout(close, 200));
 }
-$("addVia").onclick = () => { $("clickhint").style.display = "block"; $("clickhint").textContent = "Klick auf die Karte fügt einen Punkt hinzu (der letzte Punkt ist das Ziel). Oder die Route an der Linie ziehen."; };
+$("addVia").onclick = addViaSlot;
 $("swap").onclick = () => { while (points.length < 2) points.push(null); points.reverse(); renderPoints(); scheduleRoute(); };
 function clearResults() {
   routeLayer.clearLayers(); baseLayer.clearLayers(); altLayer.clearLayers(); hideGhost();
@@ -336,7 +357,7 @@ function show(d, fit = true) {
   $("sBar").innerHTML = ["own", "calm", "road"].map((k) => `<div style="width:${(s[k + "_m"] / tot * 100).toFixed(1)}%;background:${COLORS[k]}"></div>`).join("");
   const dt = $("detour");
   if (s.roundtrip) {
-    dt.innerHTML = `Rundreise: Wunsch <b>${fmtKm(s.roundtrip.target_m)}</b>, tatsächlich <b>${fmtKm(s.distance_m)}</b>. Überlappung (Hin-und-zurück): ${Math.round(s.roundtrip.overlap * 100)} %.`;
+    dt.innerHTML = `Rundreise: Wunsch <b>${fmtKm(s.roundtrip.target_m)}</b>, tatsächlich <b>${fmtKm(s.distance_m)}</b>. Überlappung (Hin-und-zurück): ${Math.round(s.roundtrip.overlap * 100)} %.` + (s.roundtrip.note ? `<br><span style="color:var(--road)">${esc(s.roundtrip.note)}</span>` : "");
     dt.style.display = "block";
   } else if (s.baseline) {
     const extra = s.detour_m;
@@ -432,10 +453,11 @@ function openRoutePopup(latlng) {
   if (!c) return;
   const box = document.createElement("div");
   const b1 = document.createElement("button"); b1.className = "popbtn"; b1.textContent = "📍 Zwischenziel hier einfügen";
-  b1.onclick = () => { map.closePopup(); if (tab === "route") insertVia(legAt(c.index), c.latlng); else toast("Bei Rundreisen: im Reiter „Route“ Zwischenziele setzen."); };
+  b1.onclick = () => { map.closePopup(); insertVia(legAt(c.index), c.latlng); };
   const b2 = document.createElement("button"); b2.className = "popbtn"; b2.textContent = "🚫 Diese Stelle meiden (Kreis 60 m)";
   b2.onclick = () => { map.closePopup(); addArea({ kind: "circle", lat: c.latlng.lat, lon: c.latlng.lng, radius_m: 60, name: "Gemiedene Stelle" }); };
-  box.append(b1, b2);
+  if (tab === "route") box.append(b1);  // Rundreisen haben keine Zwischenziele
+  box.append(b2);
   L.popup({ closeButton: false }).setLatLng(c.latlng).setContent(box).openOn(map);
 }
 

@@ -25,6 +25,32 @@ SURFACE_LABELS = {
 }
 
 
+SPIKE_MAX_M = 400.0  # Rundreisen: längere Hin-und-zurück-Spitzen zu einem Zwischenpunkt werden vermieden
+
+
+def spike_total_m(coords: list[list[float]], near_m: float = 150.0, min_len: float = 400.0, step: float = 50.0) -> float:
+    """Summe der Längen aller "Spitzen" einer Route: Stellen, an denen sie hin und dicht daneben wieder zurück fährt
+    (gleicher Weg oder Parallelweg). Punkte werden alle ``step`` Meter entlang der Route verglichen."""
+    if len(coords) < 3:
+        return 0.0
+    c = np.asarray([[p[0], p[1]] for p in coords], dtype=np.float64)
+    kx = 111_320.0 * math.cos(math.radians(float(c[0, 1])))
+    xy = np.column_stack([c[:, 0] * kx, c[:, 1] * 110_574.0])
+    d = np.concatenate([[0.0], np.cumsum(np.hypot(*np.diff(xy, axis=0).T))])
+    s_ = np.arange(0.0, d[-1], step)
+    x, y = np.interp(s_, d, xy[:, 0]), np.interp(s_, d, xy[:, 1])
+    n, total, i = len(s_), 0.0, 1
+    while i < n - 1:
+        k = 0
+        while i - k - 1 >= 0 and i + k + 1 < n and math.hypot(x[i - k - 1] - x[i + k + 1], y[i - k - 1] - y[i + k + 1]) < near_m:
+            k += 1
+        if k * step >= min_len:
+            total += k * step
+            i += k
+        i += 1
+    return total
+
+
 class NoRouteError(Exception):
     pass
 
@@ -66,6 +92,7 @@ class Piece:
     lon: np.ndarray
     ele: np.ndarray  # m, NaN = unbekannt
     share: float  # Anteil der Kante (für Teilstücke < 1)
+    vidx: np.ndarray | None = None  # globale Vertex-Indizes in Fahrtrichtung
 
 
 @dataclass
@@ -328,7 +355,7 @@ class Router:
         lon = g.v_lon[idx] / E7
         ele = g.v_ele[idx].astype(np.float64)
         ele[ele == -32768] = np.nan
-        return Piece(edge=e, reverse=rev, lat=lat, lon=lon, ele=ele / 10.0, share=share)
+        return Piece(edge=e, reverse=rev, lat=lat, lon=lon, ele=ele / 10.0, share=share, vidx=idx)
 
     def _leg(self, a: Snap, b: Snap, costs: Costs) -> Leg:
         g = self.g
@@ -460,15 +487,73 @@ class Router:
         return [p.edge for leg in res.legs for p in leg.pieces if len(p.lat) > 1]
 
     # -- Rundreisen -------------------------------------------------------
-    def _route_progressive(
-        self, points: list[tuple[float, float]], prof: Profile, opts: Options, overlays: Overlays | None, penalty: float = 2.5,
-    ) -> tuple[RouteResult, float]:
-        """Wie ``route``, aber Kanten früherer Teilstrecken sind für spätere teurer (vermeidet Hin-und-zurück).
+    def _snap_soft(self, lat: float, lon: float, toward: tuple[float, float], costs: Costs) -> Snap | None:
+        """Snap für Rundreise-Zwischenpunkte: liegt der Punkt im See oder außerhalb der Karte, wird er schrittweise
+        Richtung ``toward`` (Start) verschoben. ``None``, wenn auch das nicht hilft."""
+        for f in (0.0, 0.3, 0.55, 0.75):
+            la, lo = lat + f * (toward[0] - lat), lon + f * (toward[1] - lon)
+            try:
+                return self.snap(la, lo, costs, max_distance_m=1500.0)
+            except NoRouteError:
+                continue
+        return None
 
-        Rückgabe: (Ergebnis, Überlappungsanteil 0..1 nach Länge)."""
-        costs = self.effective_costs(prof, opts, overlays)
-        snaps = [self.snap(la, lo, costs) for la, lo in points]
-        snaps[-1] = snaps[0] if points[-1] == points[0] else snaps[-1]
+    def _remove_spurs(self, legs: list[Leg], costs: Costs) -> tuple[Leg, float]:
+        """Entfernt Stichwege (Hin und auf demselben Weg wieder zurück) aus einer Rundreise.
+
+        Die Route wird in einzelne Vertex-Schritte zerlegt; folgt auf einen Schritt A→B auf Kante e direkt B→A auf e,
+        heben sich beide auf (Stapelverfahren, auch verschachtelt). Übrig bleibt eine Kante höchstens einmal je Richtung
+        in Folge. Rückgabe: (eine Teilstrecke, Überlappungsanteil nach Länge)."""
+        g = self.g
+        stack: list[tuple[int, int, int]] = []  # (Kante, Vertex von, Vertex nach)
+        for leg in legs:
+            for p in leg.pieces:
+                v = p.vidx
+                if v is None or len(v) < 2:
+                    continue
+                for a, b in zip(v[:-1].tolist(), v[1:].tolist()):
+                    if stack and stack[-1][0] == p.edge and stack[-1][1] == b and stack[-1][2] == a:
+                        stack.pop()
+                    else:
+                        stack.append((p.edge, a, b))
+        pieces: list[Piece] = []
+        run: list[int] = []
+        run_edge, run_fwd = -1, True
+
+        def flush() -> None:
+            if len(run) < 2:
+                return
+            idx = np.array(run, dtype=np.int64)
+            ele = g.v_ele[idx].astype(np.float64)
+            ele[ele == -32768] = np.nan
+            lat, lon = g.v_lat[idx] / E7, g.v_lon[idx] / E7
+            share = min(1.0, polyline_length_m(lat, lon) / max(float(g.e_len[run_edge]), 0.01))
+            pieces.append(Piece(edge=run_edge, reverse=not run_fwd, lat=lat, lon=lon, ele=ele / 10.0, share=share, vidx=idx))
+
+        for e, a, b in stack:
+            fwd = b > a
+            if e == run_edge and fwd == run_fwd and run and run[-1] == a:
+                run.append(b)
+            else:
+                flush()
+                run, run_edge, run_fwd = [a, b], e, fwd
+        flush()
+        if not pieces:  # Start liegt direkt am einzigen Weg – nichts entfernen
+            pieces = [p for leg in legs for p in leg.pieces]
+        cost = sum(float(costs.cost[2 * p.edge + int(p.reverse)]) * p.share for p in pieces)
+        # Überlappung: Kanten, die in mehreren getrennten Stücken befahren werden (z. B. Stiel einer "Lollipop"-Schleife)
+        count: dict[int, float] = {}
+        for p in pieces:
+            count[p.edge] = count.get(p.edge, 0.0) + float(g.e_len[p.edge]) * p.share
+        runs: dict[int, int] = {}
+        for p in pieces:
+            runs[p.edge] = runs.get(p.edge, 0) + 1
+        rep = sum(l for e, l in count.items() if runs[e] > 1) / 2.0
+        tot = sum(count.values())
+        return Leg(pieces, cost), rep / max(tot, 1.0)
+
+    def _progressive_legs(self, snaps: list[Snap], costs: Costs, penalty: float) -> list[Leg]:
+        """Teilstrecken nacheinander; Kanten früherer Teilstrecken werden für spätere um ``penalty`` teurer."""
         legs: list[Leg] = []
         used: set[int] = set()
         for i in range(len(snaps) - 1):
@@ -480,19 +565,63 @@ class Router:
                 c[2 * idx + 1] *= penalty
                 use = self._prepare(Costs(cost=c, min_per_meter=costs.min_per_meter, factor=costs.factor, kind=costs.kind))
             leg = self._leg(snaps[i], snaps[i + 1], use)
-            leg.cost = sum(float(costs.cost[2 * p.edge + int(p.reverse)]) * p.share for p in leg.pieces)
             legs.append(leg)
             used |= {p.edge for p in leg.pieces if len(p.lat) > 1}
-        res = RouteResult(legs=legs, snaps=snaps, profile=prof, options=opts, cost=sum(l.cost for l in legs))
-        self._summarize(res, costs, points)
-        seen: dict[int, int] = {}
-        for leg in legs:
-            for e in {p.edge for p in leg.pieces if len(p.lat) > 1}:
-                seen[e] = seen.get(e, 0) + 1
-        g = self.g
-        rep = sum(float(g.e_len[e]) for e, k in seen.items() if k > 1)
-        tot = sum(float(g.e_len[e]) for e in seen)
-        return res, rep / max(tot, 1.0)
+        return legs
+
+    def _spike_length(self, into: Leg, out: Leg, step: float = 50.0, near_m: float = 150.0) -> float:
+        """Wie weit Hin- und Rückweg an einem Zwischenpunkt dicht beieinander verlaufen (Meter).
+
+        Verglichen werden Punkte gleichen Abstands vor und nach dem Zwischenpunkt; liegen sie näher als ``near_m``,
+        gilt das Stück als "Spitze" (hin und auf demselben oder einem Parallelweg zurück)."""
+        def xy(leg: Leg) -> np.ndarray:
+            lat = np.concatenate([p.lat for p in leg.pieces]) if leg.pieces else np.zeros(0)
+            lon = np.concatenate([p.lon for p in leg.pieces]) if leg.pieces else np.zeros(0)
+            return np.column_stack([lon * self._kx, lat * self._ky])
+
+        def walk(pts: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+            if len(pts) < 2:
+                return pts, np.zeros(len(pts))
+            return pts, np.concatenate([[0.0], np.cumsum(np.hypot(*np.diff(pts, axis=0).T))])
+
+        a, da = walk(xy(into)[::-1])  # vom Zwischenpunkt rückwärts
+        b, db = walk(xy(out))
+        if len(a) < 2 or len(b) < 2:
+            return 0.0
+        spike = 0.0
+        d = step
+        while d <= min(da[-1], db[-1]):
+            pa = np.array([np.interp(d, da, a[:, 0]), np.interp(d, da, a[:, 1])])
+            pb = np.array([np.interp(d, db, b[:, 0]), np.interp(d, db, b[:, 1])])
+            if np.hypot(*(pa - pb)) > near_m:
+                break
+            spike = d
+            d += step
+        return spike
+
+    def _route_progressive(
+        self, points: list[tuple[float, float]], prof: Profile, opts: Options, overlays: Overlays | None, penalty: float = 2.5,
+    ) -> tuple[RouteResult, float]:
+        """Rundreise durch ``points`` (Start … Start). Kanten früherer Teilstrecken sind für spätere teurer
+        (vermeidet Hin-und-zurück), Stichwege zu den Zwischenpunkten werden anschließend entfernt.
+
+        Rückgabe: (Ergebnis mit einer Teilstrecke, Überlappungsanteil 0..1 nach Länge)."""
+        costs = self.effective_costs(prof, opts, overlays)
+        start = self.snap(points[0][0], points[0][1], costs)
+        vias = [self._snap_soft(la, lo, points[0], costs) for la, lo in points[1:-1]]
+        vias = [v for v in vias if v is not None]
+        if not vias:
+            raise NoRouteError("Keine Wege für die Zwischenpunkte der Rundreise gefunden.")
+        legs = self._progressive_legs([start, *vias, start], costs, penalty)
+        # Zwischenpunkte, zu denen die Route als "Spitze" hin und (auf einem Parallelweg) zurück fährt, weglassen
+        spiky = [i for i in range(len(vias)) if self._spike_length(legs[i], legs[i + 1]) > SPIKE_MAX_M]
+        if spiky and len(spiky) < len(vias):
+            vias = [v for i, v in enumerate(vias) if i not in spiky]
+            legs = self._progressive_legs([start, *vias, start], costs, penalty)
+        leg, overlap = self._remove_spurs(legs, costs)
+        res = RouteResult(legs=[leg], snaps=[start, start], profile=prof, options=opts, cost=leg.cost)
+        self._summarize(res, costs, [points[0], points[0]])
+        return res, overlap
 
     def round_trips(
         self,
@@ -529,7 +658,6 @@ class Router:
             shapes.append((d, 3 if i % 2 == 0 else 2, 1 if (i // 2) % 2 == 0 else -1))
 
         cands: list[tuple[RouteResult, float]] = []
-        errors = 0
         for phi, m, sense in shapes:
             per = (m + 1) * 2 * math.sin(math.pi / (m + 1))
             radius = target_m / (kappa * per)
@@ -545,7 +673,6 @@ class Router:
                 try:
                     res, ovl = self._route_progressive(pts, prof, opts, overlays)
                 except NoRouteError:
-                    errors += 1
                     break
                 length = res.stats["distance_m"]
                 if best_here is None or abs(length - target_m) < abs(best_here[0].stats["distance_m"] - target_m):
@@ -559,6 +686,16 @@ class Router:
                 cands.append(best_here)
         if not cands:
             raise NoRouteError("Für diese Länge und Richtung liegt keine Rundreise im Kartengebiet.")
+        # Varianten, die weit von der Wunschlänge abweichen, nur behalten, wenn es keine besseren gibt
+        dev_of = lambda c: abs(c[0].stats["distance_m"] - target_m) / target_m  # noqa: E731
+        good = [c for c in cands if dev_of(c) <= 0.3]
+        if good:
+            cands = good
+        else:
+            cands = sorted(cands, key=dev_of)[:1]
+            cands[0][0].stats["roundtrip"]["note"] = (
+                "Die Wunschlänge lässt sich hier nicht erreichen (Kartengebiet, Gewässer oder Wegenetz begrenzen die Schleife)."
+            )
 
         # Bewertung: Länge (wichtig), Überlappung, Kosten pro Meter relativ zur besten Kandidatin
         per_m = [c.cost / max(c.stats["distance_m"], 1.0) for c, _ in cands]
@@ -567,15 +704,21 @@ class Router:
         for (c, ovl), q in zip(cands, per_m):
             dev = abs(c.stats["distance_m"] - target_m) / target_m
             exp_ = exposure(c) / max(c.stats["distance_m"], 1.0) if exposure else 0.0
-            scored.append((3.0 * dev + 2.0 * ovl + (q / q0 - 1.0) + exp_, c))
+            spike = spike_total_m(c.coords) / max(c.stats["distance_m"], 1.0)
+            c.stats["roundtrip"]["spike_m"] = round(spike * c.stats["distance_m"])
+            scored.append((3.0 * dev + 2.0 * ovl + 4.0 * spike + (q / q0 - 1.0) + exp_, c))
         scored.sort(key=lambda t: t[0])
         chosen: list[RouteResult] = []
-        for _, c in scored:
-            e = set(self._edges(c))
-            if all(len(e & set(self._edges(o))) / max(len(e), 1) < 0.6 for o in chosen):
-                chosen.append(c)
-            if len(chosen) >= n:
-                break
+        # erst Varianten ohne lange Spitzen (> 1 km), nur wenn nötig auch die übrigen
+        for allow_spikes in (False, True):
+            for _, c in scored:
+                if len(chosen) >= n:
+                    break
+                if any(c is o for o in chosen) or (not allow_spikes and c.stats["roundtrip"].get("spike_m", 0) > 1000):
+                    continue
+                e = set(self._edges(c))
+                if all(len(e & set(self._edges(o))) / max(len(e), 1) < 0.6 for o in chosen):
+                    chosen.append(c)
         return chosen
 
     # -- Auswertung -----------------------------------------------------
