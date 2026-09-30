@@ -101,8 +101,8 @@ function addPoint(lat, lon, label) {
   points[i] = p;
   activeSlot = -1;
   renderPoints();
-  if (tab === "route" || tripArmed) scheduleRoute();
-  else if (tab === "trip" && i > 0) toast("Station hinzugefügt – „Rundreise berechnen“ starten.");
+  scheduleRoute();
+  if (tab === "trip" && !tripArmed && i > 0) toast("Station hinzugefügt – „Rundreise berechnen“ starten.");
 }
 // Rundreise: leeres Stations-Feld am Ende anhängen
 function addStationSlot() {
@@ -131,7 +131,7 @@ function removePoint(i) {
   else if (Math.max(2, points.length) <= 2) points[i] = null; else points.splice(i, 1);
   while (tab === "route" && points.length && !points[points.length - 1] && points.length > 2) points.pop();
   renderPoints();
-  if (tab === "route" || tripArmed) scheduleRoute();
+  scheduleRoute();
 }
 function renderPoints() {
   const box = $("points"); box.innerHTML = "";
@@ -189,7 +189,7 @@ function movePoint(from, to, slots) {
   points.splice(to, 0, p);
   activeSlot = -1;
   renderPoints();
-  if (tab === "route" || tripArmed) scheduleRoute();
+  scheduleRoute();
   return true;
 }
 function setupReorder(grip, row, i, slots) {
@@ -253,7 +253,7 @@ function setupSearch(row, input, i) {
         const sm = document.createElement("small"); sm.textContent = s.kind; d.appendChild(sm);
         d.onclick = () => {
           points[i] = { lat: s.lat, lon: s.lon, label: s.name };
-          close(); renderPoints(); map.panTo([s.lat, s.lon]); if (tab === "route" || tripArmed) scheduleRoute();
+          close(); renderPoints(); map.panTo([s.lat, s.lon]); scheduleRoute();
         };
         box.appendChild(d);
       }
@@ -266,20 +266,32 @@ $("addVia").onclick = addViaSlot;
 $("swap").onclick = () => { while (points.length < 2) points.push(null); points.reverse(); renderPoints(); scheduleRoute(); };
 function clearResults() {
   routeLayer.clearLayers(); baseLayer.clearLayers(); altLayer.clearLayers(); hideGhost();
-  routes = []; curCoords = []; curLegEnds = [];
+  if (map) map.closePopup();
+  routes = []; curCoords = []; curLegEnds = []; lastRequest = null;
   $("alts").style.display = "none"; $("stats").style.display = "none"; $("msg").style.display = "none";
   $("toolSaveFav").disabled = true;
 }
-$("reset").onclick = () => { points = []; tripArmed = false; renderPoints(); clearResults(); location.hash = ""; };
+// Alles auf Anfang: Punkte, Stationen, Routen, laufende Berechnung, Zeichenmodus. Bereiche/Lieblingswege und Regler bleiben.
+function resetAll() {
+  clearTimeout(timer); reqId++; busy(false);
+  cancelDraw();
+  points = []; activeSlot = -1; tripArmed = false;
+  $("loop").checked = false;
+  $("tripHeading").value = "";
+  renderPoints(); clearResults();
+  history.replaceState(null, "", location.pathname);
+  toast("Zurückgesetzt – gemiedene Bereiche, Lieblingswege und Einstellungen bleiben erhalten.");
+}
+$("reset").onclick = resetAll;
 $("loop").onchange = () => scheduleRoute();
 
 // ---- Reiter: Route / Rundreise -------------------------------------------------------------------
 function setTab(t) {
   if (t === tab) return;
   tab = t; tripArmed = false;
+  document.body.classList.toggle("trip", t === "trip");
   $("tabRoute").classList.toggle("on", t === "route");
   $("tabTrip").classList.toggle("on", t === "trip");
-  $("routeTools").style.display = t === "route" ? "" : "none";
   $("tripBox").style.display = t === "trip" ? "flex" : "none";
   // Punkte bleiben erhalten: in der Rundreise werden Zwischenziele/Ziel zu Stationen und umgekehrt
   points = filled();
@@ -289,8 +301,8 @@ function setTab(t) {
 }
 $("tabRoute").onclick = () => setTab("route");
 $("tabTrip").onclick = () => setTab("trip");
-$("tripKm").oninput = () => { $("tripKmTxt").textContent = $("tripKm").value + " km"; if (tripArmed) scheduleRoute(); };
-$("tripHeading").onchange = () => { if (tripArmed) scheduleRoute(); };
+$("tripKm").oninput = () => { $("tripKmTxt").textContent = $("tripKm").value + " km"; scheduleRoute(); };
+$("tripHeading").onchange = () => scheduleRoute();
 $("addStation").onclick = addStationSlot;
 $("tripGo").onclick = () => {
   if (!points[0]) { toast("Bitte zuerst den Startpunkt setzen (Karte anklicken oder suchen)."); return; }
@@ -314,7 +326,19 @@ for (const id of ["avoid", "calm", "center", "urban", "hills", "surface", "profi
 }
 
 // ---- Routing -------------------------------------------------------------------------------------
-function scheduleRoute() { clearTimeout(timer); timer = setTimeout(route, 250); }
+function enoughPoints() { return tab === "trip" ? !!points[0] : filled().length >= 2; }
+// Neu berechnen nach einer Änderung. Fehlen Punkte (kein Start bzw. weniger als Start+Ziel), werden alle Routen sofort
+// entfernt und eine noch laufende Berechnung verworfen.
+function scheduleRoute() {
+  clearTimeout(timer);
+  if (!enoughPoints()) {
+    reqId++; busy(false); clearResults();
+    if (tab === "route") history.replaceState(null, "", location.pathname);
+    return;
+  }
+  if (tab === "trip" && !tripArmed) return;
+  timer = setTimeout(route, 250);
+}
 
 function overlaysPayload() {
   const a = areas.filter((x) => x.active).slice(0, MAX_AREAS).map((x) => x.kind === "circle"
@@ -346,7 +370,7 @@ function requestBody(compare) {
   return { ...base, points: filled().map((p) => ({ lat: p.lat, lon: p.lon })), loop: $("loop").checked, compare };
 }
 async function route() {
-  if (tab === "trip" ? !(tripArmed && points[0]) : filled().length < 2) return;
+  if (!enoughPoints() || (tab === "trip" && !tripArmed)) return;
   const my = ++reqId;
   $("msg").style.display = "none";
   busy(true, tab === "trip" ? "Rundreise wird berechnet …" : "Route wird berechnet …");
@@ -486,13 +510,51 @@ function drawElevation(pts) {
   g.fillText(Math.round(lo) + " m", 4, h - 2); g.fillText(Math.round(hi) + " m", 4, 11);
   g.textAlign = "right"; g.fillText(x1.toFixed(1) + " km", w - 4, h - 2);
 }
-$("gpx").onclick = async () => {
-  if (!lastRequest) return;
-  const r = await api("/api/gpx", { ...lastRequest, compare: false, pick: selected });
-  if (!r.ok) return;
-  const a = document.createElement("a");
-  a.href = URL.createObjectURL(await r.blob()); a.download = "fahrradnavi-route.gpx"; a.click();
-  setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+// ---- GPX-Export -------------------------------------------------------------------------------------
+// Die Datei wird im Browser aus der angezeigten Route erzeugt und im selben Klick heruntergeladen: keine erneute
+// Berechnung, exportiert genau die gewählte Variante, und der Download bleibt eine direkte Folge des Klicks
+// (Safari/iOS und Firefox blockieren Downloads, die erst nach einer Server-Antwort ausgelöst werden).
+const xmlEsc = (t) => String(t).replace(/[<>&"']/g, (c) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;", '"': "&quot;", "'": "&apos;" }[c]));
+function buildGpx(r) {
+  const s = r.stats || {};
+  const kind = s.roundtrip ? "Rundreise" : (cfg.profiles.find((p) => p.id === $("profile").value) || {}).label || "Route";
+  const name = `FahrradNavi ${kind} ${fmtKm(s.distance_m || 0)}`;
+  const now = new Date().toISOString().replace(/\.\d+Z$/, "Z");
+  const out = [
+    '<?xml version="1.0" encoding="UTF-8"?>',
+    '<gpx version="1.1" creator="FahrradNavi" xmlns="http://www.topografix.com/GPX/1/1" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.topografix.com/GPX/1/1 http://www.topografix.com/GPX/1/1/gpx.xsd">',
+    `<metadata><name>${xmlEsc(name)}</name><time>${now}</time></metadata>`,
+  ];
+  const wpts = filled();
+  wpts.forEach((p, i) => {
+    const label = i === 0 ? "Start" : !s.roundtrip && i === wpts.length - 1 ? "Ziel" : s.roundtrip ? `Station ${i}` : `Zwischenziel ${i}`;
+    out.push(`<wpt lat="${p.lat.toFixed(6)}" lon="${p.lon.toFixed(6)}"><name>${xmlEsc(label + (p.label && !/^[\d.,\s-]+$/.test(p.label) ? ": " + p.label : ""))}</name></wpt>`);
+  });
+  out.push(`<trk><name>${xmlEsc(name)}</name><trkseg>`);
+  for (const [lon, lat, ele] of r.coordinates || []) {
+    out.push(ele == null ? `<trkpt lat="${lat.toFixed(6)}" lon="${lon.toFixed(6)}"/>`
+      : `<trkpt lat="${lat.toFixed(6)}" lon="${lon.toFixed(6)}"><ele>${ele.toFixed(1)}</ele></trkpt>`);
+  }
+  out.push("</trkseg></trk></gpx>");
+  const file = `fahrradnavi-${s.roundtrip ? "rundreise" : "route"}-${((s.distance_m || 0) / 1000).toFixed(1).replace(".", "-")}km.gpx`;
+  return { text: out.join("\n"), file };
+}
+$("gpx").onclick = () => {
+  const r = routes[selected];
+  if (!r || !(r.coordinates || []).length) { toast("Keine Route zum Exportieren – bitte zuerst eine Route berechnen."); return; }
+  try {
+    const { text, file } = buildGpx(r);
+    const url = URL.createObjectURL(new Blob([text], { type: "application/gpx+xml" }));
+    const a = document.createElement("a");
+    a.href = url; a.download = file; a.rel = "noopener"; a.style.display = "none";
+    document.body.appendChild(a);  // manche Browser lösen den Download nur für Links im Dokument aus
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 60000);
+    toast(`GPX gespeichert: ${file}`);
+  } catch (e) {
+    toast("Export fehlgeschlagen: " + e.message, 6000);
+  }
 };
 function restoreFromHash(b64) {
   try {
@@ -629,7 +691,7 @@ function addArea(a) {
   areas.push({ id: uid(), name: a.name || `Bereich ${areas.length + 1}`, strength: 1, active: true, ...a });
   renderOverlays(); $("toolsCard").open = true;
   toast("Bereich hinzugefügt – Wege dort werden gemieden, soweit es einen zumutbaren Umweg gibt.");
-  if (tab === "route" || tripArmed) scheduleRoute();
+  scheduleRoute();
 }
 
 // ---- Lieblingswege (GPX) ---------------------------------------------------------------------------
@@ -663,7 +725,7 @@ function addFav(name, coords) {
   favs.push({ id: uid(), name, coords, strength: 1, active: true });
   renderOverlays(); $("toolsCard").open = true;
   toast(`Lieblingsweg „${name}“ gespeichert – wird bevorzugt.`);
-  if (tab === "route" || tripArmed) scheduleRoute();
+  scheduleRoute();
 }
 $("toolGpx").onclick = () => $("gpxFile").click();
 $("gpxFile").onchange = async () => {
@@ -704,7 +766,7 @@ function renderOverlays() {
   areaLayer.clearLayers(); favLayer.clearLayers();
   const aBox = $("areaList"), fBox = $("favList");
   aBox.innerHTML = ""; fBox.innerHTML = "";
-  const changed = () => { renderOverlays(); if (tab === "route" || tripArmed) scheduleRoute(); };
+  const changed = () => { renderOverlays(); scheduleRoute(); };
   for (const a of areas) {
     const st = { pane: "areas", color: "#d63c3c", weight: 2, dashArray: a.active ? null : "4 6", fillColor: "#d63c3c", fillOpacity: a.active ? 0.08 + 0.17 * (a.strength ?? 1) : 0.02, interactive: false };
     const layer = a.kind === "circle" ? L.circle([a.lat, a.lon], { ...st, radius: a.radius_m }) : L.polygon(a.points, st);

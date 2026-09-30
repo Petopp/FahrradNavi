@@ -94,6 +94,7 @@
   .check { display: flex; align-items: center; gap: 6px; font-size: 14px; }
   .check input { width: auto; }
   #tripBox { display: none; flex-direction: column; gap: 10px; }
+  body.trip .route-only, body:not(.trip) .trip-only { display: none; }
   #busy { position: absolute; inset: 0; z-index: 1100; display: none; align-items: center; justify-content: center; gap: 14px;
           background: rgba(20, 24, 26, .28); color: #fff; font-size: 16px; pointer-events: none; }
   #busy > div:last-child { background: #1c2124; padding: 12px 16px; border-radius: 10px; box-shadow: 0 4px 18px rgba(0,0,0,.35); }
@@ -114,18 +115,18 @@
   </div>
 
   <div id="points"></div>
-  <div id="routeTools">
-    <div class="row" style="flex-wrap:wrap">
-      <button class="btn" id="addVia" title="Zwischenziel hinzufügen">+ Zwischenziel</button>
-      <button class="btn" id="swap">⇅ Tauschen</button>
-      <button class="btn" id="reset">Zurücksetzen</button>
-    </div>
-    <label class="check" style="margin-top:8px"><input type="checkbox" id="loop"> Zurück zum Start (Rundkurs über die Zwischenziele)</label>
+  <div class="row" style="flex-wrap:wrap" id="pointBtns">
+    <button class="btn route-only" id="addVia" title="Zwischenziel hinzufügen">+ Zwischenziel</button>
+    <button class="btn trip-only" id="addStation" title="Ort, den die Rundreise anfahren soll">+ Station</button>
+    <button class="btn route-only" id="swap">⇅ Tauschen</button>
+    <button class="btn" id="reset" title="Alle Punkte und Routen löschen (Bereiche und Lieblingswege bleiben)">↺ Zurücksetzen</button>
+  </div>
+  <div id="routeTools" class="route-only">
+    <label class="check"><input type="checkbox" id="loop"> Zurück zum Start (Rundkurs über die Zwischenziele)</label>
   </div>
   <div class="hint" id="clickhint">Auf die Karte klicken, um Start und Ziel zu setzen – oder oben nach Orten suchen. Route an der Linie ziehen, um Zwischenziele einzufügen.</div>
 
   <div id="tripBox">
-    <button class="btn" id="addStation" style="align-self:flex-start" title="Ort, den die Rundreise anfahren soll">+ Station</button>
     <div class="slider">
       <div class="top"><span>Länge der Rundreise</span><span id="tripKmTxt"></span></div>
       <input type="range" id="tripKm" min="5" max="150" step="1" value="40">
