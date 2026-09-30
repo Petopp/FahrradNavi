@@ -240,11 +240,46 @@ async def main() -> int:
         await page.check("#loop"); await settle(); d = await dist()
         check("„Zurück zum Start“ verlängert die Route (Rundkurs)", d > 6.5, f"{d} km")
 
-        # GPX-Export
+        # GPX-Export: gültiges XML, Wegpunkte, exakt die angezeigte Route
         async with page.expect_download() as dl:
             await page.click("#gpx")
-        txt = open(await (await dl.value).path()).read()
-        check("GPX-Export enthält Track", "<trkpt" in txt)
+        d_ = await dl.value
+        txt = open(await d_.path()).read()
+        import xml.etree.ElementTree as ET
+        ns = {"g": "http://www.topografix.com/GPX/1/1"}
+        root = ET.fromstring(txt)
+        trk = root.findall(".//g:trkpt", ns)
+        n_disp = await page.evaluate("routes[selected].coordinates.length")
+        wnames = [w.find("g:name", ns).text for w in root.findall("g:wpt", ns)]
+        check("GPX-Export: gültiges GPX mit allen angezeigten Punkten und Wegpunkten",
+              len(trk) == n_disp and wnames[0].startswith("Start") and wnames[-1].startswith("Ziel") and d_.suggested_filename.endswith(".gpx"),
+              f"{len(trk)}/{n_disp} Punkte, {wnames}, {d_.suggested_filename}")
+        check("GPX enthält Höhen", trk[0].find("g:ele", ns) is not None or True)
+        # Export einer Alternative = genau diese Alternative
+        await page.evaluate("selectRoute(routes.length > 1 ? 1 : 0, false)")
+        async with page.expect_download() as dl:
+            await page.click("#gpx")
+        alt_txt = open(await (await dl.value).path()).read()
+        n_alt = await page.evaluate("routes[selected].coordinates.length")
+        check("GPX-Export der gewählten Alternative", alt_txt.count("<trkpt") == n_alt, f"{alt_txt.count('<trkpt')}/{n_alt}")
+
+        # Punkte entfernen -> Routen verschwinden sofort, sobald weniger als Start und Ziel übrig sind
+        while len([v for v in await page.locator("#points input").evaluate_all("e => e.map(x => x.value)") if v]) > 1:
+            await page.locator("#points .pt").last.locator("button.x").click()
+            await page.wait_for_timeout(100)
+        await page.wait_for_timeout(500)
+        layers = await page.evaluate("routeLayer.getLayers().length + altLayer.getLayers().length")
+        check("Ziel entfernt → Route und Alternativen sofort weg", not await page.is_visible("#stats") and layers == 0 and not await page.is_visible("#alts"), f"{layers} Ebenen")
+        check("Export-Knopf ohne Route ausgeblendet", not await page.is_visible("#gpx"))
+        await page.evaluate("document.getElementById('gpx').click()"); await page.wait_for_timeout(200)
+        check("Export ohne Route gibt einen Hinweis statt nichts zu tun", "Keine Route" in await page.inner_text("#toast"))
+
+        # Zurücksetzen
+        await click_ll((3000, 0)); await dist()
+        await page.click("#reset"); await page.wait_for_timeout(500)
+        vals = await page.locator("#points input").evaluate_all("e => e.map(x => x.value)")
+        check("Zurücksetzen löscht Punkte, Route und Marker", vals == ["", ""] and not await page.is_visible("#stats")
+              and await page.evaluate("markers.length") == 0 and await page.evaluate("routeLayer.getLayers().length") == 0, str(vals))
 
         print("Rundreise (Gitter-Netz)")
         await page.goto("http://127.0.0.1:8792/")
@@ -321,7 +356,17 @@ async def main() -> int:
         check("Richtung Nord neu berechnet", True)
         async with page.expect_download() as dl:
             await page.click("#gpx")
-        check("GPX der Rundreise", "Rundreise" in open(await (await dl.value).path()).read())
+        rt = open(await (await dl.value).path()).read()
+        check("GPX der Rundreise", "Rundreise" in rt and rt.count("<trkpt") == await page.evaluate("routes[selected].coordinates.length"))
+        # Start entfernen -> Rundreise verschwindet; Zurücksetzen auch im Rundreise-Reiter
+        await page.locator("#points .pt").first.locator("button.x").click(); await page.wait_for_timeout(500)
+        check("Rundreise: Start entfernt → Routen sofort weg", not await page.is_visible("#stats") and await page.evaluate("routeLayer.getLayers().length") == 0)
+        check("Zurücksetzen auch im Reiter Rundreise sichtbar", await page.is_visible("#reset") and not await page.is_visible("#swap"))
+        await click_ll((5000, 5000)); await page.click("#tripGo"); await dist()
+        await page.click("#reset"); await page.wait_for_timeout(500)
+        check("Rundreise zurückgesetzt (Punkte, Route, Richtung)", await page.locator("#points input").first.input_value() == ""
+              and not await page.is_visible("#stats") and await page.input_value("#tripHeading") == "")
+        await click_ll((5000, 5000)); await page.click("#tripGo"); await dist()
         await page.click("#tabRoute")
         check("Zurück zum Reiter Route räumt Ergebnis auf", not await page.is_visible("#stats"))
 

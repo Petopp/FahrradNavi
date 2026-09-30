@@ -94,7 +94,7 @@ Grenzen: 20 Bereiche, 300 Polygonpunkte, Radius ≤ 50 km, 10 Lieblingswege mit 
 
 *Drei Rundreisen ab der Leutstettener Straße (Wunsch 35 km): 34,3 / 33,8 / 39,0 km, Richtungen 300° / 60° / 0°.*
 
-Browser-Rauchtest der Bedienung (Playwright): `python scripts/ui_smoke.py` (49 Prüfungen auf Testnetzen).
+Browser-Rauchtest der Bedienung (Playwright): `python scripts/ui_smoke.py` (58 Prüfungen auf Testnetzen).
 
 ## Innenstadt meiden
 
@@ -176,6 +176,10 @@ Ganz Bayern: `fahrradnavi download bayern`, dann `fahrradnavi build data/bayern-
 **Weboberfläche:** Auf die Karte klicken (Start, Ziel, weitere Klicks = Zwischenziele; Marker sind verschiebbar) oder oben
 nach Orten/Straßen suchen. Route, Statistik (Anteil eigener Weg / ruhige Straße / Autostraße), Höhenprofil und der
 Button **GPX exportieren**. Die Route steht im URL-Fragment und lässt sich teilen.
+Der Export erzeugt die GPX-Datei direkt im Browser aus der angezeigten (bzw. ausgewählten) Route – mit Höhen und den
+Punkten als Wegpunkte (Start, Zwischenziele/Stationen, Ziel); keine erneute Berechnung. `POST /api/gpx` bleibt für Skripte.
+**↺ Zurücksetzen** (in beiden Reitern) löscht alle Punkte, Stationen und Routen; gemiedene Bereiche, Lieblingswege und die
+Regler bleiben. Fehlen Punkte (kein Start bzw. nur noch ein Punkt), verschwinden die Routen sofort.
 
 **Komoot & Co.:** GPX-Datei exportieren und im Komoot-Planer über *"GPX importieren"* laden bzw. in Garmin Connect,
 Wahoo, OsmAnd, Locus, Komoot etc. importieren. Die Navigation übernimmt dann die jeweilige App.
