@@ -268,7 +268,7 @@ src/fahrradnavi/
 tests/          pytest inkl. synthetischem Testnetz (tests/fixture.py)
 ```
 
-Tests: `pytest -q`.
+Tests: `pytest -q`. Aktueller Projektstand und Hinweise zum Aktualisieren: [docs/STAND.md](docs/STAND.md).
 
 ## Bekannte Grenzen
 
